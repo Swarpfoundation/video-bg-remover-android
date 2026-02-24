@@ -8,6 +8,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.videobgremover.app.ui.screens.import_video.ImportScreen
+import com.videobgremover.app.ui.screens.preview.PreviewScreen
 
 /**
  * Navigation graph for the app.
@@ -25,7 +26,6 @@ fun AppNavGraph(
         composable(route = Screen.Import.route) {
             ImportScreen(
                 onVideoImported = { videoUri ->
-                    // Navigate to preview screen with the video URI
                     navController.navigate(Screen.Preview.createRoute(videoUri))
                 }
             )
@@ -42,9 +42,14 @@ fun AppNavGraph(
             val encodedUri = backStackEntry.arguments?.getString("videoUri") ?: ""
             val videoUri = UriEncoder.decode(encodedUri)
 
-            // Placeholder for preview screen (Step 3)
-            ImportScreen(
-                onVideoImported = {}
+            PreviewScreen(
+                videoUri = videoUri,
+                onBack = {
+                    navController.popBackStack()
+                },
+                onContinue = {
+                    navController.navigate(Screen.Processing.createRoute(videoUri))
+                }
             )
         }
 
