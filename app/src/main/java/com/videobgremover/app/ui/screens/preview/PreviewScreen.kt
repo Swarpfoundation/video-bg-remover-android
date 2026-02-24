@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
@@ -160,6 +161,22 @@ fun PreviewScreen(
                 currentMode = uiState.previewMode,
                 onModeSelected = { viewModel.setPreviewMode(it) }
             )
+
+            // Fix Flicker button (shows only when not processing and has results)
+            if (!uiState.isLoading && !uiState.isProcessing && uiState.compositedBitmap != null) {
+                Button(
+                    onClick = { viewModel.applyAntiFlickerPreset() },
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    enabled = !uiState.isProcessing
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoFixHigh,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text("✨ Fix Flicker")
+                }
+            }
 
             // Action buttons
             Row(

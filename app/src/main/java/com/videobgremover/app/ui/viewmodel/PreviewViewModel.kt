@@ -221,6 +221,93 @@ class PreviewViewModel(
         loadFrame()
     }
 
+    /**
+     * Apply anti-flicker preset to stabilize edges.
+     * Increases temporal smoothing and morphology.
+     */
+    fun applyAntiFlickerPreset() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true) }
+
+            // Create new processor with anti-flicker settings
+            val antiFlickerConfig = MaskProcessingConfig(
+                useTemporalSmoothing = true,
+                temporalAlpha = 0.5f, // Stronger smoothing (default 0.3)
+                applyMorphology = true,
+                morphologyRadius = 3, // Larger radius (default 2)
+                applyFeather = true,
+                featherRadius = 4f // Slightly more feather (default 3)
+            )
+
+            // Replace the processor
+            maskProcessor.reset()
+            val newProcessor = MaskProcessor(antiFlickerConfig)
+
+            // Get the original bitmap and re-process
+            val originalBitmap = _uiState.value.originalBitmap ?: run {
+                _uiState.update { it.copy(isProcessing = false) }
+                return@launch
+            }
+
+            // Re-run segmentation with new settings
+            val result = segmentationRepository.segmentFrame(originalBitmap)
+
+            result.fold(
+                onSuccess = { confidenceMask ->
+                    try {
+                        // Process mask with anti-flicker settings
+                        val processedMask = newProcessor.processMask(
+                            confidenceMask,
+                            originalBitmap.width,
+                            originalBitmap.height
+                        )
+
+                        // Create new visualizations
+                        val maskVis = newProcessor.createMaskVisualization(
+                            processedMask,
+                            originalBitmap.width,
+                            originalBitmap.height
+                        )
+
+                        val composited = newProcessor.composeWithAlpha(
+                            originalBitmap,
+                            processedMask,
+                            originalBitmap.width,
+                            originalBitmap.height
+                        )
+
+                        // Clean up old bitmaps
+                        _uiState.value.maskBitmap?.recycle()
+                        _uiState.value.compositedBitmap?.recycle()
+
+                        _uiState.update {
+                            it.copy(
+                                isProcessing = false,
+                                maskBitmap = maskVis,
+                                compositedBitmap = composited
+                            )
+                        }
+                    } catch (e: Exception) {
+                        _uiState.update {
+                            it.copy(
+                                isProcessing = false,
+                                error = "Anti-flicker processing failed: ${e.message}"
+                            )
+                        }
+                    }
+                },
+                onFailure = { error ->
+                    _uiState.update {
+                        it.copy(
+                            isProcessing = false,
+                            error = "Failed to apply anti-flicker: ${error.message}"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         segmentationRepository.close()

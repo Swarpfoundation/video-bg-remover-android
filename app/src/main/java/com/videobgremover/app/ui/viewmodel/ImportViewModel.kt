@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.videobgremover.app.core.quality.QualityIssue
+import com.videobgremover.app.core.quality.VideoQualityAnalyzer
 import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.domain.model.VideoMetadata
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,17 +21,31 @@ import kotlinx.coroutines.launch
  */
 data class ImportUiState(
     val isLoading: Boolean = false,
+    val isAnalyzingQuality: Boolean = false,
     val videoMetadata: VideoMetadata? = null,
     val thumbnail: Bitmap? = null,
+    val qualityIssues: List<QualityIssue> = emptyList(),
+    val qualityScore: QualityScore = QualityScore.GOOD,
     val error: String? = null,
     val hasPermission: Boolean = false
 )
 
 /**
+ * Overall quality assessment.
+ */
+enum class QualityScore {
+    EXCELLENT,  // No issues
+    GOOD,       // Minor issues
+    FAIR,       // Some issues
+    POOR        // Major issues
+}
+
+/**
  * ViewModel for handling video import operations.
  */
 class ImportViewModel(
-    private val metadataExtractor: VideoMetadataExtractor
+    private val metadataExtractor: VideoMetadataExtractor,
+    private val qualityAnalyzer: VideoQualityAnalyzer
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ImportUiState())
@@ -40,7 +56,14 @@ class ImportViewModel(
      */
     fun onVideoSelected(uri: Uri) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    isAnalyzingQuality = false,
+                    error = null,
+                    qualityIssues = emptyList()
+                )
+            }
 
             // Validate the video first
             val isValid = metadataExtractor.isValidVideo(uri)
@@ -66,8 +89,9 @@ class ImportViewModel(
                         )
                     }
 
-                    // Extract thumbnail separately
+                    // Extract thumbnail and analyze quality in parallel
                     extractThumbnail(uri)
+                    analyzeQuality(uri)
                 },
                 onFailure = { error ->
                     _uiState.update {
@@ -78,6 +102,43 @@ class ImportViewModel(
                     }
                 }
             )
+        }
+    }
+
+    /**
+     * Analyze video quality to detect potential issues.
+     */
+    private fun analyzeQuality(uri: Uri) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAnalyzingQuality = true) }
+
+            val issues = qualityAnalyzer.analyze(uri)
+            val score = calculateQualityScore(issues)
+
+            _uiState.update {
+                it.copy(
+                    isAnalyzingQuality = false,
+                    qualityIssues = issues,
+                    qualityScore = score
+                )
+            }
+        }
+    }
+
+    /**
+     * Calculate overall quality score based on issues.
+     */
+    private fun calculateQualityScore(issues: List<QualityIssue>): QualityScore {
+        if (issues.isEmpty()) return QualityScore.EXCELLENT
+
+        val criticalCount = issues.count { it.severity == QualityIssue.Severity.CRITICAL }
+        val warningCount = issues.count { it.severity == QualityIssue.Severity.WARNING }
+
+        return when {
+            criticalCount > 0 -> QualityScore.POOR
+            warningCount > 2 -> QualityScore.FAIR
+            warningCount > 0 -> QualityScore.GOOD
+            else -> QualityScore.EXCELLENT
         }
     }
 
@@ -144,7 +205,8 @@ class ImportViewModel(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                     val extractor = VideoMetadataExtractor(context.applicationContext)
-                    return ImportViewModel(extractor) as T
+                    val qualityAnalyzer = VideoQualityAnalyzer(context.applicationContext)
+                    return ImportViewModel(extractor, qualityAnalyzer) as T
                 }
             }
         }

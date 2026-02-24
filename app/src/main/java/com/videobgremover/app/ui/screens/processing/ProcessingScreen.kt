@@ -12,13 +12,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Recommend
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -30,6 +36,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ProgressIndicatorDefaults
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -47,6 +54,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.videobgremover.app.core.performance.ProcessingQuality
+import com.videobgremover.app.core.performance.QualityOption
 import com.videobgremover.app.ui.viewmodel.ProcessingState
 import com.videobgremover.app.ui.viewmodel.ProcessingViewModel
 
@@ -66,13 +75,6 @@ fun ProcessingScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
-
-    // Auto-start processing on first launch
-    LaunchedEffect(Unit) {
-        if (uiState.state == ProcessingState.IDLE) {
-            viewModel.startProcessing()
-        }
-    }
 
     // Navigate to export on success
     LaunchedEffect(uiState.state, uiState.outputDir) {
@@ -127,6 +129,15 @@ fun ProcessingScreen(
                 ) { state ->
                     when (state) {
                         ProcessingState.IDLE,
+                        ProcessingState.SELECTING_QUALITY -> {
+                            QualitySelectorContent(
+                                options = uiState.qualityOptions,
+                                selectedQuality = uiState.selectedQuality,
+                                onQualitySelected = { viewModel.selectQuality(it) },
+                                onStartProcessing = { viewModel.startProcessingWithQuality() }
+                            )
+                        }
+
                         ProcessingState.ENQUEUED,
                         ProcessingState.BLOCKED -> {
                             QueuedContent()
@@ -173,6 +184,150 @@ fun ProcessingScreen(
                 onContinue = { uiState.outputDir?.let { onComplete(it) } },
                 onRetry = { viewModel.retry() }
             )
+        }
+    }
+}
+
+@Composable
+private fun QualitySelectorContent(
+    options: List<QualityOption>,
+    selectedQuality: ProcessingQuality,
+    onQualitySelected: (ProcessingQuality) -> Unit,
+    onStartProcessing: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = "Select Quality",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Text(
+            text = "Higher quality takes longer but produces better results.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Quality options
+        options.forEach { option ->
+            QualityOptionCard(
+                option = option,
+                isSelected = option.quality == selectedQuality,
+                onClick = { onQualitySelected(option.quality) }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = onStartProcessing,
+            modifier = Modifier.fillMaxWidth(0.8f)
+        ) {
+            Text("Start Processing")
+        }
+    }
+}
+
+@Composable
+private fun QualityOptionCard(
+    option: QualityOption,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val (icon, title, color) = when (option.quality) {
+        ProcessingQuality.FAST -> Triple(
+            Icons.Default.Speed,
+            "Fast",
+            MaterialTheme.colorScheme.primary
+        )
+        ProcessingQuality.BALANCED -> Triple(
+            Icons.Default.Timer,
+            "Balanced",
+            MaterialTheme.colorScheme.secondary
+        )
+        ProcessingQuality.BEST -> Triple(
+            Icons.Default.Star,
+            "Best Quality",
+            MaterialTheme.colorScheme.tertiary
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) {
+                color.copy(alpha = 0.15f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
+        ),
+        border = if (isSelected) {
+            androidx.compose.foundation.BorderStroke(2.dp, color)
+        } else null
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = isSelected,
+                onClick = onClick
+            )
+
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(32.dp)
+            )
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    if (option.recommended) {
+                        androidx.compose.material3.AssistChip(
+                            onClick = {},
+                            label = { Text("Recommended") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Recommend,
+                                    null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+                }
+
+                Text(
+                    text = option.spec.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+
+                Text(
+                    text = "Est. time: ${option.estimatedTimeStr}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = color
+                )
+            }
         }
     }
 }

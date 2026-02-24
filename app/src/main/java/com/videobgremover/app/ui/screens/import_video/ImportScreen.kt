@@ -10,10 +10,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -21,6 +26,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -40,10 +46,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.videobgremover.app.core.permission.VideoPermissionHandler
 import com.videobgremover.app.core.permission.rememberVideoPermissionLauncher
+import com.videobgremover.app.core.quality.QualityIssue
 import com.videobgremover.app.ui.components.MetadataDisplay
 import com.videobgremover.app.ui.components.VideoThumbnail
 import com.videobgremover.app.ui.contract.VideoPickerContract
 import com.videobgremover.app.ui.viewmodel.ImportViewModel
+import com.videobgremover.app.ui.viewmodel.QualityScore
 
 /**
  * Import screen for selecting and previewing videos.
@@ -166,6 +174,18 @@ fun ImportScreen(
                         )
                     }
 
+                    // Quality Analysis
+                    if (uiState.isAnalyzingQuality) {
+                        QualityAnalysisLoading()
+                    } else if (uiState.qualityIssues.isNotEmpty()) {
+                        QualityWarningsCard(
+                            score = uiState.qualityScore,
+                            issues = uiState.qualityIssues
+                        )
+                    } else if (uiState.videoMetadata != null && !uiState.isLoading) {
+                        QualityGoodCard()
+                    }
+
                     // Change video button
                     TextButton(
                         onClick = { viewModel.clearSelection() },
@@ -195,6 +215,191 @@ fun ImportScreen(
         )
     }
 }
+
+@Composable
+private fun QualityAnalysisLoading() {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp
+            )
+            Text(
+                text = "Analyzing video quality...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun QualityGoodCard() {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Column {
+                Text(
+                    text = "Great for processing!",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "This video should produce excellent results.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualityWarningsCard(
+    score: QualityScore,
+    issues: List<QualityIssue>
+) {
+    val (containerColor, icon, title, description) = when (score) {
+        QualityScore.EXCELLENT -> Quadruple(
+            MaterialTheme.colorScheme.primaryContainer,
+            Icons.Default.CheckCircle,
+            "Great for processing!",
+            "This video should produce excellent results."
+        )
+        QualityScore.GOOD -> Quadruple(
+            MaterialTheme.colorScheme.secondaryContainer,
+            Icons.Default.Info,
+            "Good for processing",
+            "Minor issues detected, but results should be good."
+        )
+        QualityScore.FAIR -> Quadruple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            Icons.Default.Warning,
+            "Fair quality",
+            "Some issues may affect results. See suggestions below."
+        )
+        QualityScore.POOR -> Quadruple(
+            MaterialTheme.colorScheme.errorContainer,
+            Icons.Default.Warning,
+            "Challenging conditions",
+            "Multiple issues detected. Consider retaking the video."
+        )
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = when (score) {
+                        QualityScore.EXCELLENT -> MaterialTheme.colorScheme.primary
+                        QualityScore.GOOD -> MaterialTheme.colorScheme.secondary
+                        QualityScore.FAIR -> MaterialTheme.colorScheme.tertiary
+                        QualityScore.POOR -> MaterialTheme.colorScheme.error
+                    },
+                    modifier = Modifier.size(24.dp)
+                )
+                Column {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            // Issue chips
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                issues.forEach { issue ->
+                    QualityIssueChip(issue = issue)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualityIssueChip(issue: QualityIssue) {
+    val (icon, containerColor) = when (issue.severity) {
+        QualityIssue.Severity.INFO -> Pair(
+            Icons.Default.Info,
+            MaterialTheme.colorScheme.surface
+        )
+        QualityIssue.Severity.WARNING -> Pair(
+            Icons.Default.Warning,
+            MaterialTheme.colorScheme.tertiaryContainer
+        )
+        QualityIssue.Severity.CRITICAL -> Pair(
+            Icons.Default.Warning,
+            MaterialTheme.colorScheme.errorContainer
+        )
+    }
+
+    InputChip(
+        selected = false,
+        onClick = { /* Show tooltip or dialog with suggestion */ },
+        label = { Text(issue.message) },
+        avatar = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    )
+}
+
+// Helper data class for 4 values
+private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D
+)
 
 @Composable
 private fun ImportPlaceholder(

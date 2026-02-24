@@ -1,13 +1,16 @@
 package com.videobgremover.app.ui.viewmodel
 
 import android.content.Context
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MediatorLiveData
-import androidx.lifecycle.MutableLiveData
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
+import com.videobgremover.app.core.performance.AdaptivePerformanceController
+import com.videobgremover.app.core.performance.ProcessingQuality
+import com.videobgremover.app.core.performance.ProcessingSpec
+import com.videobgremover.app.core.performance.QualityOption
+import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.data.repository.ProcessingRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +23,7 @@ import kotlinx.coroutines.launch
  */
 enum class ProcessingState {
     IDLE,
+    SELECTING_QUALITY, // New: User selecting quality preset
     ENQUEUED,
     RUNNING,
     SUCCEEDED,
@@ -40,7 +44,11 @@ data class ProcessingUiState(
     val status: String = "",
     val outputDir: String? = null,
     val error: String? = null,
-    val workId: String? = null
+    val workId: String? = null,
+    // New: Quality selection
+    val qualityOptions: List<QualityOption> = emptyList(),
+    val selectedQuality: ProcessingQuality = ProcessingQuality.BALANCED,
+    val videoDurationMs: Long = 0
 )
 
 /**
@@ -49,21 +57,104 @@ data class ProcessingUiState(
 class ProcessingViewModel(
     private val context: Context,
     private val videoUri: String,
+    private val performanceController: AdaptivePerformanceController,
     private val targetFps: Int = DEFAULT_TARGET_FPS,
     private val maxFrames: Int = DEFAULT_MAX_FRAMES
 ) : ViewModel() {
 
     private val repository = ProcessingRepository(context)
+    private val metadataExtractor = VideoMetadataExtractor(context)
 
     private val _uiState = MutableStateFlow(ProcessingUiState())
     val uiState: StateFlow<ProcessingUiState> = _uiState.asStateFlow()
 
-    private var workInfoLiveData: LiveData<WorkInfo?>? = null
+    private var workInfoLiveData: androidx.lifecycle.LiveData<WorkInfo?>? = null
+
+    init {
+        loadQualityOptions()
+    }
+
+    /**
+     * Load video metadata and calculate quality options.
+     */
+    private fun loadQualityOptions() {
+        viewModelScope.launch {
+            try {
+                val uri = Uri.parse(videoUri)
+                val metadataResult = metadataExtractor.extract(uri)
+
+                metadataResult.fold(
+                    onSuccess = { metadata ->
+                        val durationMs = metadata.durationMs
+                        val options = performanceController.getQualityOptions(durationMs)
+
+                        _uiState.update {
+                            it.copy(
+                                state = ProcessingState.SELECTING_QUALITY,
+                                qualityOptions = options,
+                                videoDurationMs = durationMs
+                            )
+                        }
+                    },
+                    onFailure = {
+                        // Fallback to default options
+                        val options = performanceController.getQualityOptions(30000)
+                        _uiState.update {
+                            it.copy(
+                                state = ProcessingState.SELECTING_QUALITY,
+                                qualityOptions = options
+                            )
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                // Start with default options
+                val options = performanceController.getQualityOptions(30000)
+                _uiState.update {
+                    it.copy(
+                        state = ProcessingState.SELECTING_QUALITY,
+                        qualityOptions = options
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Select processing quality.
+     */
+    fun selectQuality(quality: ProcessingQuality) {
+        _uiState.update { it.copy(selectedQuality = quality) }
+    }
+
+    /**
+     * Start processing with selected quality.
+     */
+    fun startProcessingWithQuality(quality: ProcessingQuality? = null) {
+        val selectedQuality = quality ?: _uiState.value.selectedQuality
+        val spec = _uiState.value.qualityOptions
+            .find { it.quality == selectedQuality }?.spec
+            ?: return
+
+        // Calculate actual maxFrames based on spec
+        val durationSec = _uiState.value.videoDurationMs / 1000
+        val effectiveMaxFrames = ((durationSec * spec.targetFps) / spec.processEveryNFrames).toInt()
+
+        startProcessing(
+            targetFps = spec.targetFps,
+            maxFrames = effectiveMaxFrames.coerceAtMost(maxFrames),
+            processEveryNFrames = spec.processEveryNFrames
+        )
+    }
 
     /**
      * Start processing the video.
      */
-    fun startProcessing() {
+    private fun startProcessing(
+        targetFps: Int = this.targetFps,
+        maxFrames: Int = this.maxFrames,
+        processEveryNFrames: Int = 1
+    ) {
         if (_uiState.value.state == ProcessingState.RUNNING ||
             _uiState.value.state == ProcessingState.ENQUEUED
         ) {
@@ -86,9 +177,6 @@ class ProcessingViewModel(
      * Observe work progress via LiveData.
      */
     private fun observeWork(workId: String) {
-        // Remove previous observer if exists
-        workInfoLiveData?.let { /* cleanup handled by MediatorLiveData pattern */ }
-
         val liveData = repository.getWorkInfo(workId)
 
         liveData.observeForever { workInfo ->
@@ -162,8 +250,7 @@ class ProcessingViewModel(
      * Retry processing after failure.
      */
     fun retry() {
-        _uiState.update { ProcessingUiState() }
-        startProcessing()
+        _uiState.update { it.copy(state = ProcessingState.SELECTING_QUALITY) }
     }
 
     /**
@@ -175,8 +262,6 @@ class ProcessingViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        // Note: We don't cancel the work when ViewModel is cleared
-        // The work should continue in background
         workInfoLiveData?.removeObserver { }
     }
 
@@ -196,9 +281,11 @@ class ProcessingViewModel(
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                    val performanceController = AdaptivePerformanceController(context.applicationContext)
                     return ProcessingViewModel(
                         context.applicationContext,
                         videoUri,
+                        performanceController,
                         targetFps,
                         maxFrames
                     ) as T
