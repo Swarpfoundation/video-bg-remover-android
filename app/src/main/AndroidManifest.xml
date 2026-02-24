@@ -53,6 +53,10 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <receiver
+            android:name=".core.notification.ProcessingCancelReceiver"
+            android:exported="false" />
+
     </application>
 
 </manifest>
