@@ -7,6 +7,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.videobgremover.app.ui.screens.export.ExportScreen
 import com.videobgremover.app.ui.screens.import_video.ImportScreen
 import com.videobgremover.app.ui.screens.preview.PreviewScreen
 import com.videobgremover.app.ui.screens.processing.ProcessingScreen
@@ -71,18 +72,35 @@ fun AppNavGraph(
                     navController.popBackStack()
                 },
                 onComplete = { outputDir ->
-                    // Navigate to export screen (Step 5)
-                    navController.navigate(Screen.Export.route) {
+                    navController.navigate(Screen.Export.createRoute(outputDir)) {
                         popUpTo(Screen.Import.route) { inclusive = false }
                     }
                 }
             )
         }
 
-        composable(route = Screen.Export.route) {
-            // Placeholder for export screen (Step 5)
-            ImportScreen(
-                onVideoImported = {}
+        composable(
+            route = Screen.Export.route,
+            arguments = listOf(
+                navArgument("sourceDir") {
+                    type = NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+            val encodedDir = backStackEntry.arguments?.getString("sourceDir") ?: ""
+            val sourceDir = UriEncoder.decode(encodedDir)
+
+            ExportScreen(
+                sourceDir = sourceDir,
+                onBack = {
+                    navController.popBackStack()
+                },
+                onDone = {
+                    // Return to import screen
+                    navController.navigate(Screen.Import.route) {
+                        popUpTo(Screen.Import.route) { inclusive = true }
+                    }
+                }
             )
         }
     }

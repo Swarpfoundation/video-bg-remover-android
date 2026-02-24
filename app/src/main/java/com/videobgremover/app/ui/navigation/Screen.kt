@@ -13,14 +13,13 @@ sealed class Screen(val route: String) {
         fun createRoute(videoUri: String) = "processing/${UriEncoder.encode(videoUri)}"
     }
 
-    data object Export : Screen("export") {
-        const val PARAM_VIDEO_URI = "videoUri"
-        const val PARAM_OUTPUT_DIR = "outputDir"
+    data object Export : Screen("export/{sourceDir}") {
+        fun createRoute(sourceDir: String) = "export/${UriEncoder.encode(sourceDir)}"
     }
 }
 
 /**
- * Utility for encoding/decoding URIs for navigation.
+ * Utility for encoding/decoding URIs and paths for navigation.
  */
 object UriEncoder {
     fun encode(uri: String): String = java.net.URLEncoder.encode(uri, "UTF-8")
