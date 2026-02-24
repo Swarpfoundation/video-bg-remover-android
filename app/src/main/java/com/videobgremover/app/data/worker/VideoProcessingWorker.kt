@@ -9,8 +9,10 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.videobgremover.app.core.Logger
 import com.videobgremover.app.core.notification.ProcessingNotificationHelper
+import com.videobgremover.app.core.processing.EdgeDecontamination
 import com.videobgremover.app.core.processing.MaskProcessingConfig
 import com.videobgremover.app.core.processing.MaskProcessor
+import com.videobgremover.app.core.processing.MotionAwareTemporalFilter
 import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.data.repository.SegmentationRepositoryImpl
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,20 @@ class VideoProcessingWorker(
     private val metadataExtractor = VideoMetadataExtractor(context)
     private val segmentationRepository = SegmentationRepositoryImpl(context)
     private val maskProcessor = MaskProcessor(MaskProcessingConfig())
+    private val motionFilter = MotionAwareTemporalFilter(
+        MotionAwareTemporalFilter.Config(
+            temporalAlpha = 0.35f,
+            useMotionCompensation = true
+        )
+    )
+    private val edgeDecontamination = EdgeDecontamination(
+        EdgeDecontamination.Config(
+            decontaminationStrength = 0.6f,
+            enableForGreen = true,
+            enableForBlue = true,
+            enableForRed = false
+        )
+    )
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val videoUri = inputData.getString(KEY_VIDEO_URI)
@@ -104,9 +120,17 @@ class VideoProcessingWorker(
                     if (segmentationResult.isSuccess) {
                         val confidenceMask = segmentationResult.getOrThrow()
 
-                        // Process mask
-                        val processedMask = maskProcessor.processMask(
+                        // Apply motion-aware temporal smoothing
+                        val temporallySmoothedMask = motionFilter.process(
                             confidenceMask,
+                            frameBitmap,
+                            frameBitmap.width,
+                            frameBitmap.height
+                        )
+
+                        // Apply additional post-processing (threshold, morphology, feather)
+                        val processedMask = maskProcessor.processMask(
+                            temporallySmoothedMask,
                             frameBitmap.width,
                             frameBitmap.height
                         )
@@ -118,6 +142,9 @@ class VideoProcessingWorker(
                             frameBitmap.width,
                             frameBitmap.height
                         )
+
+                        // Apply edge decontamination to remove background color spill
+                        edgeDecontamination.process(outputBitmap, processedMask, outputBitmap.width, outputBitmap.height)
 
                         // Save PNG
                         saveFrame(outputBitmap, outputDir, processedFrames)
@@ -166,8 +193,8 @@ class VideoProcessingWorker(
             // Create metadata file
             createMetadataFile(outputDir, metadata, processedFrames, targetFps)
 
-            // Clean up
-            segmentationRepository.close()
+            // Create metadata file
+            createMetadataFile(outputDir, metadata, processedFrames, targetFps)
 
             Logger.d("Processing complete. Output: ${outputDir.absolutePath}")
 
@@ -181,8 +208,11 @@ class VideoProcessingWorker(
             )
         } catch (e: Exception) {
             Logger.e("Processing failed", e)
-            segmentationRepository.close()
             Result.failure(errorData("Processing failed: ${e.message}"))
+        } finally {
+            // Clean up
+            segmentationRepository.close()
+            motionFilter.reset()
         }
     }
 

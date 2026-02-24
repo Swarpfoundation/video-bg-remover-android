@@ -105,6 +105,9 @@ dependencies {
     // MediaPipe
     implementation(libs.mediapipe.tasks.vision)
 
+    // ML Kit
+    implementation(libs.mlkit.face.detection)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)
