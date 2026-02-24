@@ -16,6 +16,8 @@ sealed class Screen(val route: String) {
     data object Export : Screen("export/{sourceDir}") {
         fun createRoute(sourceDir: String) = "export/${UriEncoder.encode(sourceDir)}"
     }
+
+    data object Settings : Screen("settings")
 }
 
 /**

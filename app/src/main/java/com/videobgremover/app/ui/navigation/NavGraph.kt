@@ -11,6 +11,7 @@ import com.videobgremover.app.ui.screens.export.ExportScreen
 import com.videobgremover.app.ui.screens.import_video.ImportScreen
 import com.videobgremover.app.ui.screens.preview.PreviewScreen
 import com.videobgremover.app.ui.screens.processing.ProcessingScreen
+import com.videobgremover.app.ui.screens.settings.SettingsScreen
 
 /**
  * Navigation graph for the app.
@@ -29,6 +30,9 @@ fun AppNavGraph(
             ImportScreen(
                 onVideoImported = { videoUri ->
                     navController.navigate(Screen.Preview.createRoute(videoUri))
+                },
+                onSettingsClick = {
+                    navController.navigate(Screen.Settings.route)
                 }
             )
         }
@@ -100,6 +104,14 @@ fun AppNavGraph(
                     navController.navigate(Screen.Import.route) {
                         popUpTo(Screen.Import.route) { inclusive = true }
                     }
+                }
+            )
+        }
+
+        composable(route = Screen.Settings.route) {
+            SettingsScreen(
+                onBack = {
+                    navController.popBackStack()
                 }
             )
         }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -50,6 +51,7 @@ import com.videobgremover.app.ui.viewmodel.ImportViewModel
 @Composable
 fun ImportScreen(
     onVideoImported: (String) -> Unit,
+    onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: ImportViewModel = viewModel(factory = ImportViewModel.createFactory(LocalContext.current))
 ) {
@@ -93,13 +95,22 @@ fun ImportScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                contentAlignment = Alignment.Center
+                    .padding(16.dp)
             ) {
                 Text(
                     text = "Import Video",
-                    style = MaterialTheme.typography.headlineMedium
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.align(Alignment.Center)
                 )
+                IconButton(
+                    onClick = onSettingsClick,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings"
+                    )
+                }
             }
         },
         floatingActionButton = {
