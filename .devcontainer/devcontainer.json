@@ -1,0 +1,40 @@
+{
+    "name": "Android Development",
+    "image": "mcr.microsoft.com/devcontainers/java:17",
+    "features": {
+        "ghcr.io/devcontainers/features/android-sdk:1": {
+            "version": "latest",
+            "platforms": "33,34,35",
+            "buildTools": "34.0.0"
+        },
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "vscjava.vscode-java-pack",
+                "vscjava.vscode-gradle",
+                "vscjava.vscode-java-debug",
+                "vscjava.vscode-java-dependency",
+                "vscjava.vscode-java-test",
+                "redhat.java",
+                "fwcd.kotlin",
+                "mathiasfrohlich.Kotlin",
+                "streetsidesoftware.code-spell-checker"
+            ],
+            "settings": {
+                "java.configuration.updateBuildConfiguration": "automatic",
+                "java.format.settings.url": "https://raw.githubusercontent.com/google/styleguide/gh-pages/eclipse-java-google-style.xml",
+                "editor.formatOnSave": true
+            }
+        }
+    },
+    "postCreateCommand": "./gradlew --version",
+    "remoteUser": "vscode",
+    "hostRequirements": {
+        "cpus": 4,
+        "memory": "8gb",
+        "storage": "32gb"
+    }
+}
