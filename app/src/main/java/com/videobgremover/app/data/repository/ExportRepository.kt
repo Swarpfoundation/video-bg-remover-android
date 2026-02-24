@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.StatFs
 import com.videobgremover.app.core.Logger
+import com.videobgremover.app.data.exporter.MaskVideoExporter
 import com.videobgremover.app.data.exporter.ZipExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -49,6 +50,7 @@ data class ExportState(
 class ExportRepository(private val context: Context) {
 
     private val zipExporter = ZipExporter(context)
+    private val maskVideoExporter = MaskVideoExporter(context)
 
     /**
      * Check if there's enough storage space available.
@@ -214,8 +216,12 @@ class ExportRepository(private val context: Context) {
     /**
      * Create a chooser intent for sharing.
      */
-    fun createShareChooserIntent(uri: Uri, title: String = "Share export"): Intent {
-        val shareIntent = createShareIntent(uri)
+    fun createShareChooserIntent(
+        uri: Uri,
+        mimeType: String = "application/zip",
+        title: String = "Share export"
+    ): Intent {
+        val shareIntent = createShareIntent(uri, mimeType)
         return Intent.createChooser(shareIntent, title)
     }
 
@@ -269,6 +275,58 @@ class ExportRepository(private val context: Context) {
         } catch (e: Exception) {
             Logger.e("Failed to cleanup output directory", e)
             false
+        }
+    }
+
+    /**
+     * Export as mask MP4 video from processed frames.
+     */
+    suspend fun exportAsMaskMp4(
+        sourceDir: File,
+        destinationUri: Uri? = null
+): ExportState = withContext(Dispatchers.IO) {
+        // Clean up old exports
+        zipExporter.cleanupOldExports()
+
+        val outputFile = File(
+            context.cacheDir,
+            "exports/${MaskVideoExporter.generateDefaultFilename()}"
+        )
+        outputFile.parentFile?.mkdirs()
+
+        val result = maskVideoExporter.createMaskVideoFromProcessedDir(
+            processedDir = sourceDir,
+            outputFile = outputFile
+        )
+
+        when (result) {
+            is MaskVideoExporter.MaskVideoExportResult.Success -> {
+                // Copy to destination if provided
+                if (destinationUri != null) {
+                    copyToSafDestination(outputFile, destinationUri)
+                }
+
+                val contentUri = zipExporter.getContentUri(outputFile)
+                ExportState(
+                    isExporting = false,
+                    progress = 100,
+                    outputUri = contentUri
+                )
+            }
+
+            is MaskVideoExporter.MaskVideoExportResult.Error -> {
+                ExportState(
+                    isExporting = false,
+                    error = result.message
+                )
+            }
+
+            MaskVideoExporter.MaskVideoExportResult.Cancelled -> {
+                ExportState(
+                    isExporting = false,
+                    error = "Export cancelled"
+                )
+            }
         }
     }
 }

@@ -121,11 +121,34 @@ class ExportViewModel(
 
         when (format) {
             ExportFormat.PNG_ZIP -> exportAsZip(safUri)
-            ExportFormat.MASK_MP4 -> {
-                // Placeholder for Step 6
-                _uiState.update {
-                    it.copy(error = "MP4 mask export coming in next update")
-                }
+            ExportFormat.MASK_MP4 -> exportAsMaskMp4(safUri)
+        }
+    }
+
+    /**
+     * Export as mask MP4 video.
+     */
+    private fun exportAsMaskMp4(safUri: Uri? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(exportState = it.exportState.copy(isExporting = true)) }
+
+            val state = repository.exportAsMaskMp4(sourceDirFile, safUri)
+
+            _uiState.update {
+                it.copy(
+                    exportState = state,
+                    outputUri = state.outputUri,
+                    canShare = state.outputUri != null && !state.isExporting
+                )
+            }
+
+            // Copy to SAF if needed
+            if (state.outputUri != null &&
+                _uiState.value.exportDestination == ExportDestination.SAF &&
+                safUri != null
+            ) {
+                val file = File(state.outputUri.path ?: return@launch)
+                repository.copyToSafDestination(file, safUri)
             }
         }
     }

@@ -253,8 +253,7 @@ private fun ExportFormatCard(
                 description = "Grayscale H.264 video for use as luma matte. " +
                     "White = opaque, Black = transparent.",
                 selected = selectedFormat == ExportFormat.MASK_MP4,
-                onClick = { onFormatSelected(ExportFormat.MASK_MP4) },
-                enabled = false // Coming in Step 6
+                onClick = { onFormatSelected(ExportFormat.MASK_MP4) }
             )
         }
     }
