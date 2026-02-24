@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
@@ -162,19 +163,35 @@ fun PreviewScreen(
                 onModeSelected = { viewModel.setPreviewMode(it) }
             )
 
-            // Fix Flicker button (shows only when not processing and has results)
+            // Quick fix buttons (shows only when not processing and has results)
             if (!uiState.isLoading && !uiState.isProcessing && uiState.compositedBitmap != null) {
-                Button(
-                    onClick = { viewModel.applyAntiFlickerPreset() },
-                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                    enabled = !uiState.isProcessing
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoFixHigh,
-                        contentDescription = null,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                    Text("✨ Fix Flicker")
+                    OutlinedButton(
+                        onClick = { viewModel.applySpotRemovalPreset() },
+                        enabled = !uiState.isProcessing
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CleaningServices,
+                            contentDescription = null,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                        Text("Remove Spots")
+                    }
+
+                    OutlinedButton(
+                        onClick = { viewModel.applyAntiFlickerPreset() },
+                        enabled = !uiState.isProcessing
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoFixHigh,
+                            contentDescription = null,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                        Text("Fix Flicker")
+                    }
                 }
             }
 

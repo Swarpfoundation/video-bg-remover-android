@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
@@ -222,6 +223,32 @@ class PreviewViewModel(
     }
 
     /**
+     * Apply spot removal preset.
+     * Aggressively removes isolated spots and fills holes.
+     */
+    fun applySpotRemovalPreset() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isProcessing = true) }
+
+            // Create new processor with aggressive spot removal
+            val spotRemovalConfig = MaskProcessingConfig(
+                threshold = 0.5f,
+                useTemporalSmoothing = true,
+                temporalAlpha = 0.3f,
+                applyMorphology = true,
+                morphologyRadius = 3,
+                applyFeather = true,
+                featherRadius = 2f,
+                removeSpeckles = true,
+                speckleMinSize = 100,  // Remove smaller components
+                speckleMaxHole = 200   // Fill larger holes
+            )
+
+            reprocessWithConfig(spotRemovalConfig)
+        }
+    }
+
+    /**
      * Apply anti-flicker preset to stabilize edges.
      * Increases temporal smoothing and morphology.
      */
@@ -236,76 +263,86 @@ class PreviewViewModel(
                 applyMorphology = true,
                 morphologyRadius = 3, // Larger radius (default 2)
                 applyFeather = true,
-                featherRadius = 4f // Slightly more feather (default 3)
+                featherRadius = 4f, // Slightly more feather (default 3)
+                removeSpeckles = true,
+                speckleMinSize = 30,
+                speckleMaxHole = 50
             )
 
-            // Replace the processor
-            maskProcessor.reset()
-            val newProcessor = MaskProcessor(antiFlickerConfig)
+            reprocessWithConfig(antiFlickerConfig)
+        }
+    }
 
-            // Get the original bitmap and re-process
-            val originalBitmap = _uiState.value.originalBitmap ?: run {
-                _uiState.update { it.copy(isProcessing = false) }
-                return@launch
-            }
+    /**
+     * Re-process the frame with a specific config.
+     */
+    private suspend fun reprocessWithConfig(config: MaskProcessingConfig) {
+        // Replace the processor
+        maskProcessor.reset()
+        val newProcessor = MaskProcessor(config)
 
-            // Re-run segmentation with new settings
-            val result = segmentationRepository.segmentFrame(originalBitmap)
+        // Get the original bitmap and re-process
+        val originalBitmap = _uiState.value.originalBitmap ?: run {
+            _uiState.update { it.copy(isProcessing = false) }
+            return
+        }
 
-            result.fold(
-                onSuccess = { confidenceMask ->
-                    try {
-                        // Process mask with anti-flicker settings
-                        val processedMask = newProcessor.processMask(
-                            confidenceMask,
-                            originalBitmap.width,
-                            originalBitmap.height
-                        )
+        // Re-run segmentation with new settings
+        val result = segmentationRepository.segmentFrame(originalBitmap)
 
-                        // Create new visualizations
-                        val maskVis = newProcessor.createMaskVisualization(
-                            processedMask,
-                            originalBitmap.width,
-                            originalBitmap.height
-                        )
+        result.fold(
+            onSuccess = { confidenceMask ->
+                try {
+                    // Process mask with new settings
+                    val processedMask = newProcessor.processMask(
+                        confidenceMask,
+                        originalBitmap.width,
+                        originalBitmap.height
+                    )
 
-                        val composited = newProcessor.composeWithAlpha(
-                            originalBitmap,
-                            processedMask,
-                            originalBitmap.width,
-                            originalBitmap.height
-                        )
+                    // Create new visualizations
+                    val maskVis = newProcessor.createMaskVisualization(
+                        processedMask,
+                        originalBitmap.width,
+                        originalBitmap.height
+                    )
 
-                        // Clean up old bitmaps
-                        _uiState.value.maskBitmap?.recycle()
-                        _uiState.value.compositedBitmap?.recycle()
+                    val composited = newProcessor.composeWithAlpha(
+                        originalBitmap,
+                        processedMask,
+                        originalBitmap.width,
+                        originalBitmap.height
+                    )
 
-                        _uiState.update {
-                            it.copy(
-                                isProcessing = false,
-                                maskBitmap = maskVis,
-                                compositedBitmap = composited
-                            )
-                        }
-                    } catch (e: Exception) {
-                        _uiState.update {
-                            it.copy(
-                                isProcessing = false,
-                                error = "Anti-flicker processing failed: ${e.message}"
-                            )
-                        }
-                    }
-                },
-                onFailure = { error ->
+                    // Clean up old bitmaps
+                    _uiState.value.maskBitmap?.recycle()
+                    _uiState.value.compositedBitmap?.recycle()
+
                     _uiState.update {
                         it.copy(
                             isProcessing = false,
-                            error = "Failed to apply anti-flicker: ${error.message}"
+                            maskBitmap = maskVis,
+                            compositedBitmap = composited
+                        )
+                    }
+                } catch (e: Exception) {
+                    _uiState.update {
+                        it.copy(
+                            isProcessing = false,
+                            error = "Processing failed: ${e.message}"
                         )
                     }
                 }
-            )
-        }
+            },
+            onFailure = { error ->
+                _uiState.update {
+                    it.copy(
+                        isProcessing = false,
+                        error = "Failed to process: ${error.message}"
+                    )
+                }
+            }
+        )
     }
 
     override fun onCleared() {

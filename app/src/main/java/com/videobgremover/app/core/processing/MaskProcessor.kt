@@ -19,7 +19,10 @@ data class MaskProcessingConfig(
     val applyMorphology: Boolean = true,
     val morphologyRadius: Int = 2,
     val applyFeather: Boolean = true,
-    val featherRadius: Float = 3f
+    val featherRadius: Float = 3f,
+    val removeSpeckles: Boolean = true,
+    val speckleMinSize: Int = 50,      // Minimum component size to keep
+    val speckleMaxHole: Int = 100      // Maximum hole size to fill
 )
 
 /**
@@ -33,6 +36,14 @@ class MaskProcessor(
     private val config: MaskProcessingConfig = MaskProcessingConfig()
 ) {
     private var previousMask: FloatArray? = null
+    private val speckleRemover by lazy {
+        SpeckleRemover(
+            minComponentSize = config.speckleMinSize,
+            maxHoleSize = config.speckleMaxHole,
+            removeIslands = true,
+            fillHoles = true
+        )
+    }
 
     /**
      * Process a raw confidence mask from the segmentation model.
@@ -58,7 +69,12 @@ class MaskProcessor(
             mask = applyMorphology(mask, width, height)
         }
 
-        // Step 4: Feather edges
+        // Step 4: Remove speckles and spots
+        if (config.removeSpeckles) {
+            mask = speckleRemover.process(mask, width, height)
+        }
+
+        // Step 5: Feather edges
         if (config.applyFeather) {
             mask = applyFeather(mask, width, height)
         }
