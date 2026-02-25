@@ -2,10 +2,14 @@ package com.videobgremover.app.data.repository
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.net.Uri
 import android.os.StatFs
+import android.provider.MediaStore
 import com.videobgremover.app.core.Logger
+import com.videobgremover.app.data.exporter.MaskVideoExportResult
 import com.videobgremover.app.data.exporter.MaskVideoExporter
+import com.videobgremover.app.data.exporter.ZipExportResult
 import com.videobgremover.app.data.exporter.ZipExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -13,7 +17,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
+import java.io.FileInputStream
 
 /**
  * Export format options.
@@ -40,6 +44,7 @@ data class ExportState(
     val progress: Int = 0,
     val currentFile: String = "",
     val totalFiles: Int = 0,
+    val cacheFilePath: String? = null,
     val outputUri: Uri? = null,
     val error: String? = null
 )
@@ -110,18 +115,34 @@ class ExportRepository(private val context: Context) {
         }
 
         when (result) {
-            is ZipExporter.ZipExportResult.Success -> {
-                val contentUri = zipExporter.getContentUri(result.zipFile)
+            is ZipExportResult.Success -> {
+                val finalOutputUri = if (destinationUri != null) {
+                    val copyResult = copyToSafDestination(result.zipFile, destinationUri)
+                    copyResult.getOrElse { error ->
+                        emit(
+                            ExportState(
+                                isExporting = false,
+                                cacheFilePath = result.zipFile.absolutePath,
+                                error = "Failed to save to destination: ${error.message}"
+                            )
+                        )
+                        return@flow
+                    }
+                } else {
+                    zipExporter.getContentUri(result.zipFile)
+                }
+
                 emit(
                     ExportState(
                         isExporting = false,
                         progress = 100,
-                        outputUri = contentUri
+                        cacheFilePath = result.zipFile.absolutePath,
+                        outputUri = finalOutputUri
                     )
                 )
             }
 
-            is ZipExporter.ZipExportResult.Error -> {
+            is ZipExportResult.Error -> {
                 emit(
                     ExportState(
                         isExporting = false,
@@ -130,7 +151,7 @@ class ExportRepository(private val context: Context) {
                 )
             }
 
-            ZipExporter.ZipExportResult.Cancelled -> {
+            ZipExportResult.Cancelled -> {
                 emit(
                     ExportState(
                         isExporting = false,
@@ -148,16 +169,25 @@ class ExportRepository(private val context: Context) {
         sourceFile: File,
         destinationUri: Uri
     ): Result<Uri> = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
         try {
-            context.contentResolver.openOutputStream(destinationUri)?.use { outputStream ->
+            val outputStream = resolver.openOutputStream(destinationUri)
+                ?: return@withContext Result.failure(
+                    IllegalStateException("Failed to open destination output stream")
+                )
+
+            outputStream.use { stream ->
                 FileInputStream(sourceFile).use { inputStream ->
-                    inputStream.copyTo(outputStream)
+                    inputStream.copyTo(stream)
+                    stream.flush()
                 }
             }
             Logger.d("Copied ${sourceFile.name} to SAF destination")
             Result.success(destinationUri)
         } catch (e: Exception) {
             Logger.e("Failed to copy to SAF destination", e)
+            // Best-effort rollback if the destination document was partially written.
+            runCatching { resolver.delete(destinationUri, null, null) }
             Result.failure(e)
         }
     }
@@ -169,34 +199,68 @@ class ExportRepository(private val context: Context) {
         sourceFile: File,
         fileName: String
     ): Result<Uri> = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        var insertedUri: Uri? = null
         try {
-            val contentValues = android.content.ContentValues().apply {
-                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                put(
-                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
-                    "Movies/VideoBgRemover"
-                )
-                put(android.provider.MediaStore.MediaColumns.DATE_ADDED, System.currentTimeMillis() / 1000)
+            val isMp4 = fileName.lowercase().endsWith(".mp4")
+            val mimeType = if (isMp4) "video/mp4" else "application/zip"
+            val collection = when {
+                isMp4 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                isMp4 ->
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+                else ->
+                    MediaStore.Files.getContentUri("external")
             }
 
-            val uri = context.contentResolver.insert(
-                android.provider.MediaStore.Files.getContentUri("external"),
+            val contentValues = android.content.ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Movies/VideoBgRemover")
+                put(MediaStore.MediaColumns.DATE_ADDED, System.currentTimeMillis() / 1000)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+            }
+
+            val uri = resolver.insert(
+                collection,
                 contentValues
             ) ?: return@withContext Result.failure(
                 IllegalStateException("Failed to create MediaStore entry")
             )
+            insertedUri = uri
 
-            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+            val outputStream = resolver.openOutputStream(uri)
+                ?: throw IllegalStateException("Failed to open MediaStore output stream")
+
+            outputStream.use { stream ->
                 FileInputStream(sourceFile).use { inputStream ->
-                    inputStream.copyTo(outputStream)
+                    inputStream.copyTo(stream)
+                    stream.flush()
                 }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                resolver.update(
+                    uri,
+                    android.content.ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    },
+                    null,
+                    null
+                )
             }
 
             Logger.d("Saved ${sourceFile.name} to MediaStore")
             Result.success(uri)
         } catch (e: Exception) {
             Logger.e("Failed to save to MediaStore", e)
+            insertedUri?.let { uri ->
+                runCatching { resolver.delete(uri, null, null) }
+            }
             Result.failure(e)
         }
     }
@@ -256,7 +320,7 @@ class ExportRepository(private val context: Context) {
 
             result[key] = when {
                 value.matches(Regex("-?\\d+")) -> value.toLong()
-                value.matches(Regex("-?\\d+\.\\d+")) -> value.toDouble()
+                value.matches(Regex("-?\\d+\\.\\d+")) -> value.toDouble()
                 value == "true" -> true
                 value == "false" -> false
                 else -> value
@@ -300,28 +364,37 @@ class ExportRepository(private val context: Context) {
         )
 
         when (result) {
-            is MaskVideoExporter.MaskVideoExportResult.Success -> {
+            is MaskVideoExportResult.Success -> {
                 // Copy to destination if provided
-                if (destinationUri != null) {
-                    copyToSafDestination(outputFile, destinationUri)
+                val finalOutputUri = if (destinationUri != null) {
+                    val copyResult = copyToSafDestination(outputFile, destinationUri)
+                    copyResult.getOrElse { error ->
+                        return@withContext ExportState(
+                            isExporting = false,
+                            cacheFilePath = outputFile.absolutePath,
+                            error = "Failed to save to destination: ${error.message}"
+                        )
+                    }
+                } else {
+                    zipExporter.getContentUri(outputFile)
                 }
 
-                val contentUri = zipExporter.getContentUri(outputFile)
                 ExportState(
                     isExporting = false,
                     progress = 100,
-                    outputUri = contentUri
+                    cacheFilePath = outputFile.absolutePath,
+                    outputUri = finalOutputUri
                 )
             }
 
-            is MaskVideoExporter.MaskVideoExportResult.Error -> {
+            is MaskVideoExportResult.Error -> {
                 ExportState(
                     isExporting = false,
                     error = result.message
                 )
             }
 
-            MaskVideoExporter.MaskVideoExportResult.Cancelled -> {
+            MaskVideoExportResult.Cancelled -> {
                 ExportState(
                     isExporting = false,
                     error = "Export cancelled"

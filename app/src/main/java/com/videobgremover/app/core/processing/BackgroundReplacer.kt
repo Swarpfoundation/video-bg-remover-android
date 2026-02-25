@@ -249,7 +249,7 @@ class BackgroundReplacer {
 
     private fun applyBoxBlur(bitmap: Bitmap, radius: Int): Bitmap {
         // Very simple box blur - in production use RenderScript
-        val output = bitmap.copy(bitmap.config, true)
+        val output = bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, true)
         val width = bitmap.width
         val height = bitmap.height
         val pixels = IntArray(width * height)
@@ -327,13 +327,9 @@ class BackgroundReplacer {
                 "Purple Dream" to Background.Gradient(
                     Color.parseColor("#667eea"),
                     Color.parseColor("#764ba2"),
-                    Background.GradientOrientation.DIAGONAL
+                    Background.GradientOrientation.VERTICAL
                 )
             )
         }
     }
 }
-
-// Extension for diagonal gradient
-private val Background.GradientOrientation.DIAGONAL: Background.GradientOrientation
-    get() = Background.GradientOrientation.VERTICAL // Fallback

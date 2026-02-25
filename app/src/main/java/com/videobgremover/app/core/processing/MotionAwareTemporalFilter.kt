@@ -66,7 +66,9 @@ class MotionAwareTemporalFilter {
             prevGray != null &&
             prevMask != null &&
             prevGray.size == currentGray.size &&
-            prevMask.size == currentMask.size
+            prevMask.size == currentMask.size &&
+            previousWidth == width &&
+            previousHeight == height
         ) {
             // Estimate motion between frames
             val motionVectors = estimateMotion(prevGray, currentGray, width, height)
@@ -110,6 +112,9 @@ class MotionAwareTemporalFilter {
     ): Array<MotionVector> {
         val blocksX = width / blockSize
         val blocksY = height / blockSize
+        if (blocksX <= 0 || blocksY <= 0) {
+            return emptyArray()
+        }
         val vectors = Array(blocksX * blocksY) { MotionVector(0f, 0f) }
 
         for (by in 0 until blocksY) {
@@ -139,11 +144,14 @@ class MotionAwareTemporalFilter {
                     }
                 }
 
-                vectors[blockIdx] = MotionVector(bestDx.toFloat(), bestDy.toFloat())
+                vectors[blockIdx] = MotionVector(
+                    bestDx.toFloat().coerceIn(-config.maxMotionPixels, config.maxMotionPixels),
+                    bestDy.toFloat().coerceIn(-config.maxMotionPixels, config.maxMotionPixels)
+                )
             }
         }
 
-        return vectors
+        return smoothMotionVectors(vectors, blocksX, blocksY)
     }
 
     /**
@@ -174,11 +182,53 @@ class MotionAwareTemporalFilter {
                 ) {
                     val idx1 = py1 * width + px1
                     val idx2 = py2 * width + px2
-                    sad += abs(prev[idx1] - curr[idx2])
+                    val prevValue = prev[idx1].toInt() and 0xFF
+                    val currValue = curr[idx2].toInt() and 0xFF
+                    sad += abs(prevValue - currValue)
                 }
             }
         }
         return sad
+    }
+
+    /**
+     * Smooth block motion vectors to reduce jitter from noisy matches.
+     */
+    private fun smoothMotionVectors(
+        vectors: Array<MotionVector>,
+        blocksX: Int,
+        blocksY: Int
+    ): Array<MotionVector> {
+        if (vectors.isEmpty()) return vectors
+
+        val smoothed = Array(vectors.size) { MotionVector(0f, 0f) }
+        for (by in 0 until blocksY) {
+            for (bx in 0 until blocksX) {
+                var sumDx = 0f
+                var sumDy = 0f
+                var count = 0
+
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        val nx = bx + dx
+                        val ny = by + dy
+                        if (nx !in 0 until blocksX || ny !in 0 until blocksY) continue
+                        val mv = vectors[ny * blocksX + nx]
+                        sumDx += mv.dx
+                        sumDy += mv.dy
+                        count++
+                    }
+                }
+
+                val idx = by * blocksX + bx
+                smoothed[idx] = if (count > 0) {
+                    MotionVector(sumDx / count, sumDy / count)
+                } else {
+                    vectors[idx]
+                }
+            }
+        }
+        return smoothed
     }
 
     /**

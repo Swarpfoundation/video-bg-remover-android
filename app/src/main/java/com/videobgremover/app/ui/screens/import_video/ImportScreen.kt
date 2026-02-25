@@ -1,9 +1,12 @@
 package com.videobgremover.app.ui.screens.import_video
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,6 +14,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -26,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -40,6 +46,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -59,8 +68,8 @@ import com.videobgremover.app.ui.viewmodel.QualityScore
 @Composable
 fun ImportScreen(
     onVideoImported: (String) -> Unit,
-    onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier,
+    onSettingsClick: () -> Unit = {},
     viewModel: ImportViewModel = viewModel(factory = ImportViewModel.createFactory(LocalContext.current))
 ) {
     val context = LocalContext.current
@@ -76,7 +85,15 @@ fun ImportScreen(
     val videoPickerLauncher = rememberLauncherForActivityResult(
         contract = VideoPickerContract()
     ) { uri ->
-        uri?.let { viewModel.onVideoSelected(it) }
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.onVideoSelected(it)
+        }
     }
 
     // Check permission on first launch
@@ -98,26 +115,42 @@ fun ImportScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            Box(
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = "Import Video",
-                    style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.align(Alignment.Center)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)
                 )
-                IconButton(
-                    onClick = onSettingsClick,
-                    modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings"
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Studio Import",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Bring in a clip for matte cleanup",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                    }
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings"
+                        )
+                    }
                 }
             }
         },
@@ -127,6 +160,8 @@ fun ImportScreen(
                     onClick = {
                         uiState.videoMetadata?.uri?.let { onVideoImported(it) }
                     },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     icon = {
                         Icon(
                             imageVector = Icons.Default.VideoFile,
@@ -221,7 +256,8 @@ private fun QualityAnalysisLoading() {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+        ),
+        shape = MaterialTheme.shapes.medium
     ) {
         Row(
             modifier = Modifier
@@ -248,7 +284,8 @@ private fun QualityGoodCard() {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+        ),
+        shape = MaterialTheme.shapes.medium
     ) {
         Row(
             modifier = Modifier
@@ -279,6 +316,7 @@ private fun QualityGoodCard() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QualityWarningsCard(
     score: QualityScore,
@@ -314,7 +352,8 @@ private fun QualityWarningsCard(
     Card(
         colors = CardDefaults.cardColors(
             containerColor = containerColor
-        )
+        ),
+        shape = MaterialTheme.shapes.medium
     ) {
         Column(
             modifier = Modifier
@@ -383,6 +422,9 @@ private fun QualityIssueChip(issue: QualityIssue) {
         selected = false,
         onClick = { /* Show tooltip or dialog with suggestion */ },
         label = { Text(issue.message) },
+        colors = androidx.compose.material3.InputChipDefaults.inputChipColors(
+            containerColor = containerColor.copy(alpha = 0.9f)
+        ),
         avatar = {
             Icon(
                 imageVector = icon,
@@ -409,13 +451,28 @@ private fun ImportPlaceholder(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         onClick = onClick
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(MaterialTheme.shapes.large)
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+                        )
+                    )
+                )
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+                    shape = MaterialTheme.shapes.large
+                ),
             contentAlignment = Alignment.Center
         ) {
             if (isLoading) {
@@ -423,7 +480,8 @@ private fun ImportPlaceholder(
             } else {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(24.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.VideoFile,
@@ -432,15 +490,20 @@ private fun ImportPlaceholder(
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Tap to import video",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "Drop In Your Clip",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "MP4, MKV, WebM, and other formats supported",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        text = "Preview quality before processing. Best results come from clear edges and steady lighting.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "MP4 • MOV • MKV • WEBM",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }

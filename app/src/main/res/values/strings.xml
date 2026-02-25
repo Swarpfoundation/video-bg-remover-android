@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Video BG Remover</string>
-    <string name="processing_notification_title">Removing video background...</string>
+    <string name="processing_notification_title">Removing video background…</string>
     <string name="processing_notification_cancel">Cancel</string>
     <string name="processing_channel_name">Video Processing</string>
     <string name="processing_channel_description">Shows progress when removing video backgrounds</string>

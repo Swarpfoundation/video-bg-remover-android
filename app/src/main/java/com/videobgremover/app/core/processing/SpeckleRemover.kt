@@ -187,7 +187,7 @@ class SpeckleRemover(
         )
 
         while (queue.isNotEmpty()) {
-            val (x, y) = queue.poll()
+            val (x, y) = queue.removeFirst()
             component.add(x to y)
 
             for ((dx, dy) in directions) {

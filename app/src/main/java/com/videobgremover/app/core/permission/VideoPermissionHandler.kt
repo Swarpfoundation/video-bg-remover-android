@@ -22,7 +22,9 @@ object VideoPermissionHandler {
      * - Android 12 and below: READ_EXTERNAL_STORAGE
      */
     fun getRequiredPermission(): String {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Manifest.permission.READ_MEDIA_VIDEO
         } else {
             Manifest.permission.READ_EXTERNAL_STORAGE
@@ -33,6 +35,17 @@ object VideoPermissionHandler {
      * Checks if the required permission is granted.
      */
     fun hasPermission(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val hasSelectedAccess = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+            val hasFullVideoAccess = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_MEDIA_VIDEO
+            ) == PackageManager.PERMISSION_GRANTED
+            return hasSelectedAccess || hasFullVideoAccess
+        }
         return ContextCompat.checkSelfPermission(
             context,
             getRequiredPermission()

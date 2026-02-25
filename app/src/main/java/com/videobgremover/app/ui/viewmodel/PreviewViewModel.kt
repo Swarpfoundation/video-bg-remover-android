@@ -10,12 +10,16 @@ import com.videobgremover.app.core.processing.MaskProcessingConfig
 import com.videobgremover.app.core.processing.MaskProcessor
 import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.data.repository.SegmentationRepositoryImpl
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Preview mode for the segmentation display.
@@ -44,16 +48,19 @@ data class PreviewUiState(
  * ViewModel for previewing segmentation on a single frame.
  */
 class PreviewViewModel(
-    private val context: Context,
+    context: Context,
     private val videoUri: String
 ) : ViewModel() {
 
-    private val metadataExtractor = VideoMetadataExtractor(context)
-    private val segmentationRepository = SegmentationRepositoryImpl(context)
+    private val metadataExtractor = VideoMetadataExtractor(context.applicationContext)
+    private val segmentationRepository = SegmentationRepositoryImpl(context.applicationContext)
     private val maskProcessor = MaskProcessor(MaskProcessingConfig())
 
     private val _uiState = MutableStateFlow(PreviewUiState())
     val uiState: StateFlow<PreviewUiState> = _uiState.asStateFlow()
+    private var pipelineJob: Job? = null
+    private var reprocessJob: Job? = null
+    private var frameToken: Long = 0
 
     init {
         loadFrame()
@@ -63,7 +70,13 @@ class PreviewViewModel(
      * Load a frame from the video and run segmentation.
      */
     private fun loadFrame() {
-        viewModelScope.launch {
+        val previousPipelineJob = pipelineJob
+        val previousReprocessJob = reprocessJob
+        val token = ++frameToken
+
+        pipelineJob = viewModelScope.launch {
+            previousReprocessJob?.cancelAndJoin()
+            previousPipelineJob?.cancelAndJoin()
             _uiState.update { it.copy(isLoading = true, error = null) }
 
             val uri = Uri.parse(videoUri)
@@ -76,68 +89,80 @@ class PreviewViewModel(
                 height = PREVIEW_HEIGHT
             )
 
-            frameResult.fold(
-                onSuccess = { bitmap ->
-                    _uiState.update { it.copy(originalBitmap = bitmap) }
-                    runSegmentation(bitmap)
-                },
-                onFailure = { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            error = "Failed to load frame: ${error.message}"
-                        )
-                    }
+            if (frameResult.isSuccess) {
+                val bitmap = frameResult.getOrThrow()
+                if (!isCurrentFrame(token) || !isScopeActive()) {
+                    recycleBitmap(bitmap)
+                    return@launch
                 }
-            )
+
+                replaceOriginalBitmap(bitmap)
+                replaceProcessedBitmaps(maskBitmap = null, compositedBitmap = null)
+                runSegmentation(bitmap, token)
+            } else {
+                val error = frameResult.exceptionOrNull()
+                if (!isCurrentFrame(token) || !isScopeActive()) return@launch
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "Failed to load frame: ${error?.message}"
+                    )
+                }
+            }
         }
     }
 
     /**
      * Run segmentation on the loaded frame.
      */
-    private fun runSegmentation(bitmap: Bitmap) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true) }
+    private suspend fun runSegmentation(bitmap: Bitmap, token: Long) {
+        if (!isCurrentFrame(token) || !isScopeActive()) return
 
-            // Initialize segmenter if needed
-            if (!segmentationRepository.initialize().isSuccess) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isProcessing = false,
-                        error = "Failed to initialize segmentation model"
-                    )
-                }
-                return@launch
+        _uiState.update { it.copy(isProcessing = true) }
+
+        // Initialize segmenter if needed
+        if (!segmentationRepository.initialize().isSuccess) {
+            if (!isCurrentFrame(token) || !isScopeActive()) return
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isProcessing = false,
+                    error = "Failed to initialize segmentation model"
+                )
             }
+            return
+        }
 
-            // Run segmentation
-            val result = segmentationRepository.segmentFrame(bitmap)
+        // Run segmentation
+        val result = segmentationRepository.segmentFrame(bitmap)
+        if (!isCurrentFrame(token) || !isScopeActive()) return
 
-            result.fold(
-                onSuccess = { confidenceMask ->
-                    processMask(confidenceMask, bitmap)
-                },
-                onFailure = { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            isProcessing = false,
-                            error = "Segmentation failed: ${error.message}"
-                        )
-                    }
-                }
+        if (result.isSuccess) {
+            val segmentationMask = result.getOrThrow()
+            val confidenceMask = MaskProcessor.normalizeToFrameSize(
+                segmentationMask,
+                bitmap.width,
+                bitmap.height
             )
+            processMask(confidenceMask, bitmap, token)
+        } else {
+            val error = result.exceptionOrNull()
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isProcessing = false,
+                    error = "Segmentation failed: ${error?.message}"
+                )
+            }
         }
     }
 
     /**
      * Process the raw confidence mask and generate preview bitmaps.
      */
-    private fun processMask(confidenceMask: FloatArray, sourceBitmap: Bitmap) {
-        viewModelScope.launch(Dispatchers.Default) {
-            try {
+    private suspend fun processMask(confidenceMask: FloatArray, sourceBitmap: Bitmap, token: Long) {
+        try {
+            val (maskVis, composited) = withContext(Dispatchers.Default) {
                 // Process mask
                 val processedMask = maskProcessor.processMask(
                     confidenceMask,
@@ -160,22 +185,30 @@ class PreviewViewModel(
                     sourceBitmap.height
                 )
 
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isProcessing = false,
-                        maskBitmap = maskVis,
-                        compositedBitmap = composited
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        isProcessing = false,
-                        error = "Mask processing failed: ${e.message}"
-                    )
-                }
+                maskVis to composited
+            }
+
+            if (!isCurrentFrame(token) || !isScopeActive()) {
+                recycleBitmap(maskVis)
+                recycleBitmap(composited)
+                return
+            }
+
+            replaceProcessedBitmaps(maskBitmap = maskVis, compositedBitmap = composited)
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isProcessing = false
+                )
+            }
+        } catch (e: Exception) {
+            if (!isCurrentFrame(token) || !isScopeActive()) return
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isProcessing = false,
+                    error = "Mask processing failed: ${e.message}"
+                )
             }
         }
     }
@@ -227,25 +260,25 @@ class PreviewViewModel(
      * Aggressively removes isolated spots and fills holes.
      */
     fun applySpotRemovalPreset() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true) }
+        // Create new processor with aggressive spot removal
+        val spotRemovalConfig = MaskProcessingConfig(
+            threshold = 0.55f,
+            useTemporalSmoothing = true,
+            temporalAlpha = 0.3f,
+            useHysteresisThreshold = true,
+            hysteresisDelta = 0.12f,
+            applyMorphology = true,
+            morphologyRadius = 3,
+            applyNeighborhoodConsensusFilter = true,
+            consensusPasses = 2,
+            applyFeather = true,
+            featherRadius = 2f,
+            removeSpeckles = true,
+            speckleMinSize = 100,  // Remove smaller components
+            speckleMaxHole = 200   // Fill larger holes
+        )
 
-            // Create new processor with aggressive spot removal
-            val spotRemovalConfig = MaskProcessingConfig(
-                threshold = 0.5f,
-                useTemporalSmoothing = true,
-                temporalAlpha = 0.3f,
-                applyMorphology = true,
-                morphologyRadius = 3,
-                applyFeather = true,
-                featherRadius = 2f,
-                removeSpeckles = true,
-                speckleMinSize = 100,  // Remove smaller components
-                speckleMaxHole = 200   // Fill larger holes
-            )
-
-            reprocessWithConfig(spotRemovalConfig)
-        }
+        startReprocess(spotRemovalConfig)
     }
 
     /**
@@ -253,30 +286,44 @@ class PreviewViewModel(
      * Increases temporal smoothing and morphology.
      */
     fun applyAntiFlickerPreset() {
-        viewModelScope.launch {
+        // Create new processor with anti-flicker settings
+        val antiFlickerConfig = MaskProcessingConfig(
+            threshold = 0.5f,
+            useTemporalSmoothing = true,
+            temporalAlpha = 0.45f, // Stronger smoothing (default 0.3)
+            useHysteresisThreshold = true,
+            hysteresisDelta = 0.12f,
+            applyMorphology = true,
+            morphologyRadius = 3, // Larger radius (default 2)
+            applyNeighborhoodConsensusFilter = true,
+            consensusPasses = 2,
+            applyFeather = true,
+            featherRadius = 4f, // Slightly more feather (default 3)
+            removeSpeckles = true,
+            speckleMinSize = 30,
+            speckleMaxHole = 50
+        )
+
+        startReprocess(antiFlickerConfig)
+    }
+
+    private fun startReprocess(config: MaskProcessingConfig) {
+        val previousReprocessJob = reprocessJob
+        val token = frameToken
+
+        reprocessJob = viewModelScope.launch {
+            previousReprocessJob?.cancelAndJoin()
+            if (!isCurrentFrame(token) || !isScopeActive()) return@launch
+
             _uiState.update { it.copy(isProcessing = true) }
-
-            // Create new processor with anti-flicker settings
-            val antiFlickerConfig = MaskProcessingConfig(
-                useTemporalSmoothing = true,
-                temporalAlpha = 0.5f, // Stronger smoothing (default 0.3)
-                applyMorphology = true,
-                morphologyRadius = 3, // Larger radius (default 2)
-                applyFeather = true,
-                featherRadius = 4f, // Slightly more feather (default 3)
-                removeSpeckles = true,
-                speckleMinSize = 30,
-                speckleMaxHole = 50
-            )
-
-            reprocessWithConfig(antiFlickerConfig)
+            reprocessWithConfig(config, token)
         }
     }
 
     /**
      * Re-process the frame with a specific config.
      */
-    private suspend fun reprocessWithConfig(config: MaskProcessingConfig) {
+    private suspend fun reprocessWithConfig(config: MaskProcessingConfig, token: Long) {
         // Replace the processor
         maskProcessor.reset()
         val newProcessor = MaskProcessor(config)
@@ -289,10 +336,18 @@ class PreviewViewModel(
 
         // Re-run segmentation with new settings
         val result = segmentationRepository.segmentFrame(originalBitmap)
+        if (!isCurrentFrame(token) || !isScopeActive()) return
 
-        result.fold(
-            onSuccess = { confidenceMask ->
-                try {
+        if (result.isSuccess) {
+            val segmentationMask = result.getOrThrow()
+            try {
+                val (maskVis, composited) = withContext(Dispatchers.Default) {
+                    val confidenceMask = MaskProcessor.normalizeToFrameSize(
+                        segmentationMask,
+                        originalBitmap.width,
+                        originalBitmap.height
+                    )
+
                     // Process mask with new settings
                     val processedMask = newProcessor.processMask(
                         confidenceMask,
@@ -314,43 +369,92 @@ class PreviewViewModel(
                         originalBitmap.height
                     )
 
-                    // Clean up old bitmaps
-                    _uiState.value.maskBitmap?.recycle()
-                    _uiState.value.compositedBitmap?.recycle()
-
-                    _uiState.update {
-                        it.copy(
-                            isProcessing = false,
-                            maskBitmap = maskVis,
-                            compositedBitmap = composited
-                        )
-                    }
-                } catch (e: Exception) {
-                    _uiState.update {
-                        it.copy(
-                            isProcessing = false,
-                            error = "Processing failed: ${e.message}"
-                        )
-                    }
+                    maskVis to composited
                 }
-            },
-            onFailure = { error ->
+
+                if (!isCurrentFrame(token) || !isScopeActive()) {
+                    recycleBitmap(maskVis)
+                    recycleBitmap(composited)
+                    return
+                }
+
+                replaceProcessedBitmaps(maskBitmap = maskVis, compositedBitmap = composited)
+
                 _uiState.update {
                     it.copy(
                         isProcessing = false,
-                        error = "Failed to process: ${error.message}"
+                        isLoading = false
+                    )
+                }
+            } catch (e: Exception) {
+                if (!isCurrentFrame(token) || !isScopeActive()) return
+                _uiState.update {
+                    it.copy(
+                        isProcessing = false,
+                        error = "Processing failed: ${e.message}"
                     )
                 }
             }
-        )
+        } else {
+            val error = result.exceptionOrNull()
+            if (!isCurrentFrame(token) || !isScopeActive()) return
+            _uiState.update {
+                it.copy(
+                    isProcessing = false,
+                    error = "Failed to process: ${error?.message}"
+                )
+            }
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
+        pipelineJob?.cancel()
+        reprocessJob?.cancel()
         segmentationRepository.close()
-        _uiState.value.originalBitmap?.recycle()
-        _uiState.value.maskBitmap?.recycle()
-        _uiState.value.compositedBitmap?.recycle()
+        recycleBitmap(_uiState.value.originalBitmap)
+        recycleBitmap(_uiState.value.maskBitmap)
+        recycleBitmap(_uiState.value.compositedBitmap)
+    }
+
+    private fun isCurrentFrame(token: Long): Boolean = token == frameToken
+
+    private fun isScopeActive(): Boolean = viewModelScope.coroutineContext.isActive
+
+    private fun replaceOriginalBitmap(originalBitmap: Bitmap?) {
+        var oldBitmap: Bitmap? = null
+        _uiState.update { current ->
+            oldBitmap = current.originalBitmap
+            current.copy(originalBitmap = originalBitmap)
+        }
+        if (oldBitmap !== originalBitmap) {
+            recycleBitmap(oldBitmap)
+        }
+    }
+
+    private fun replaceProcessedBitmaps(maskBitmap: Bitmap?, compositedBitmap: Bitmap?) {
+        var oldMask: Bitmap? = null
+        var oldComposited: Bitmap? = null
+        _uiState.update { current ->
+            oldMask = current.maskBitmap
+            oldComposited = current.compositedBitmap
+            current.copy(
+                maskBitmap = maskBitmap,
+                compositedBitmap = compositedBitmap
+            )
+        }
+        if (oldMask !== maskBitmap) {
+            recycleBitmap(oldMask)
+        }
+        if (oldComposited !== compositedBitmap) {
+            recycleBitmap(oldComposited)
+        }
+    }
+
+    private fun recycleBitmap(bitmap: Bitmap?) {
+        if (bitmap != null && !bitmap.isRecycled) {
+            runCatching { bitmap.recycle() }
+        }
     }
 
     companion object {

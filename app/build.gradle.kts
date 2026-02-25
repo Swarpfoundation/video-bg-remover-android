@@ -63,6 +63,8 @@ android {
 
     lint {
         disable += "ObsoleteLintCustomCheck"
+        // Keep CI focused on code/resource correctness; dependency updates are tracked separately.
+        disable += setOf("GradleDependency", "AndroidGradlePluginVersion")
         abortOnError = true
         warningsAsErrors = true
         checkReleaseBuilds = true
@@ -98,6 +100,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.compose.material.icons.extended)
 
     // WorkManager
     implementation(libs.androidx.work.runtime.ktx)
@@ -122,7 +125,10 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.turbine)
     testImplementation(libs.androidx.core.testing)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.kotlinx.coroutines.core)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

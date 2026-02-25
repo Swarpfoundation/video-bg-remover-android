@@ -2,6 +2,7 @@ package com.videobgremover.app.ui.viewmodel
 
 import android.content.Context
 import android.net.Uri
+import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -55,20 +56,21 @@ data class ProcessingUiState(
  * ViewModel for managing video processing UI.
  */
 class ProcessingViewModel(
-    private val context: Context,
+    context: Context,
     private val videoUri: String,
     private val performanceController: AdaptivePerformanceController,
     private val targetFps: Int = DEFAULT_TARGET_FPS,
     private val maxFrames: Int = DEFAULT_MAX_FRAMES
 ) : ViewModel() {
 
-    private val repository = ProcessingRepository(context)
-    private val metadataExtractor = VideoMetadataExtractor(context)
+    private val repository = ProcessingRepository(context.applicationContext)
+    private val metadataExtractor = VideoMetadataExtractor(context.applicationContext)
 
     private val _uiState = MutableStateFlow(ProcessingUiState())
     val uiState: StateFlow<ProcessingUiState> = _uiState.asStateFlow()
 
     private var workInfoLiveData: androidx.lifecycle.LiveData<WorkInfo?>? = null
+    private var workInfoObserver: Observer<WorkInfo?>? = null
 
     init {
         loadQualityOptions()
@@ -177,13 +179,25 @@ class ProcessingViewModel(
      * Observe work progress via LiveData.
      */
     private fun observeWork(workId: String) {
+        clearWorkObserver()
         val liveData = repository.getWorkInfo(workId)
-
-        liveData.observeForever { workInfo ->
+        val observer = Observer<WorkInfo?> { workInfo ->
             workInfo?.let { updateStateFromWorkInfo(it) }
         }
 
+        liveData.observeForever(observer)
         workInfoLiveData = liveData
+        workInfoObserver = observer
+    }
+
+    private fun clearWorkObserver() {
+        val liveData = workInfoLiveData
+        val observer = workInfoObserver
+        if (liveData != null && observer != null) {
+            liveData.removeObserver(observer)
+        }
+        workInfoLiveData = null
+        workInfoObserver = null
     }
 
     /**
@@ -237,6 +251,13 @@ class ProcessingViewModel(
                 error = error
             )
         }
+
+        if (state == ProcessingState.SUCCEEDED ||
+            state == ProcessingState.FAILED ||
+            state == ProcessingState.CANCELLED
+        ) {
+            clearWorkObserver()
+        }
     }
 
     /**
@@ -262,7 +283,7 @@ class ProcessingViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        workInfoLiveData?.removeObserver { }
+        clearWorkObserver()
     }
 
     companion object {

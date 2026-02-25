@@ -2,6 +2,7 @@ package com.videobgremover.app.ui.screens.processing
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -50,6 +52,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -94,10 +98,14 @@ fun ProcessingScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Processing Video") },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -201,12 +209,12 @@ private fun QualitySelectorContent(
         modifier = Modifier.fillMaxWidth()
     ) {
         Text(
-            text = "Select Quality",
+            text = "Choose Processing Profile",
             style = MaterialTheme.typography.headlineSmall
         )
 
         Text(
-            text = "Higher quality takes longer but produces better results.",
+            text = "Pick speed vs. edge fidelity. You can preview and re-run if artifacts remain.",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
@@ -261,17 +269,24 @@ private fun QualityOptionCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
             .clickable { onClick() },
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                color.copy(alpha = 0.15f)
+                color.copy(alpha = 0.14f)
             } else {
-                MaterialTheme.colorScheme.surfaceVariant
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.84f)
             }
         ),
+        shape = MaterialTheme.shapes.large,
         border = if (isSelected) {
             androidx.compose.foundation.BorderStroke(2.dp, color)
-        } else null
+        } else {
+            androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.14f)
+            )
+        }
     ) {
         Row(
             modifier = Modifier
@@ -363,8 +378,9 @@ private fun ProcessingContent(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+        ),
+        shape = MaterialTheme.shapes.large
     ) {
         Column(
             modifier = Modifier.padding(24.dp),
@@ -375,7 +391,8 @@ private fun ProcessingContent(
             Box(contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(120.dp),
-                    strokeWidth = 8.dp
+                    strokeWidth = 8.dp,
+                    trackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
                 )
                 Text(
                     text = "$progress%",
@@ -386,7 +403,10 @@ private fun ProcessingContent(
             // Progress bar
             LinearProgressIndicator(
                 progress = { animatedProgress },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(999.dp))
+                    .height(8.dp)
             )
 
             // Frame count
@@ -561,6 +581,7 @@ private fun BottomActions(
     ) {
         when (state) {
             ProcessingState.IDLE,
+            ProcessingState.SELECTING_QUALITY,
             ProcessingState.ENQUEUED,
             ProcessingState.BLOCKED,
             ProcessingState.RUNNING -> {

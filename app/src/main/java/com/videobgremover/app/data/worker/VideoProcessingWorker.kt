@@ -15,11 +15,13 @@ import com.videobgremover.app.core.processing.MaskProcessor
 import com.videobgremover.app.core.processing.MotionAwareTemporalFilter
 import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.data.repository.SegmentationRepositoryImpl
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 
 /**
  * Worker for processing video frames in the background.
@@ -60,11 +62,18 @@ class VideoProcessingWorker(
         val targetFps = inputData.getInt(KEY_TARGET_FPS, DEFAULT_TARGET_FPS)
         val maxFrames = inputData.getInt(KEY_MAX_FRAMES, DEFAULT_MAX_FRAMES)
 
-        Logger.d("Starting video processing for URI: $videoUri")
+        Logger.d(
+            "Starting video processing for selected video: ${
+                runCatching { Uri.parse(videoUri).lastPathSegment ?: "<unknown>" }.getOrDefault("<unknown>")
+            }"
+        )
+
+        var cleanupOutputDir: File? = null
+        var completedSuccessfully = false
 
         try {
             // Initialize segmentation
-            setProgress(progressData(0, 0, "Initializing..."))
+            setProgress(progressData(progress = 0, framesProcessed = 0, status = "Initializing..."))
 
             val initResult = segmentationRepository.initialize()
             if (initResult.isFailure) {
@@ -95,6 +104,7 @@ class VideoProcessingWorker(
 
             // Create output directory
             val outputDir = File(applicationContext.cacheDir, "processed/${System.currentTimeMillis()}")
+            cleanupOutputDir = outputDir
             outputDir.mkdirs()
 
             // Process frames
@@ -118,7 +128,12 @@ class VideoProcessingWorker(
                     val segmentationResult = segmentationRepository.segmentFrame(frameBitmap)
 
                     if (segmentationResult.isSuccess) {
-                        val confidenceMask = segmentationResult.getOrThrow()
+                        val segmentationMask = segmentationResult.getOrThrow()
+                        val confidenceMask = MaskProcessor.normalizeToFrameSize(
+                            segmentationMask,
+                            frameBitmap.width,
+                            frameBitmap.height
+                        )
 
                         // Apply motion-aware temporal smoothing
                         val temporallySmoothedMask = motionFilter.process(
@@ -190,15 +205,17 @@ class VideoProcessingWorker(
                 }
             }
 
-            // Create metadata file
-            createMetadataFile(outputDir, metadata, processedFrames, targetFps)
+            if (!isActive || isStopped) {
+                throw CancellationException("Video processing cancelled")
+            }
 
             // Create metadata file
             createMetadataFile(outputDir, metadata, processedFrames, targetFps)
 
-            Logger.d("Processing complete. Output: ${outputDir.absolutePath}")
+            Logger.d("Processing complete. Output dir: ${outputDir.name}")
 
             // Return success with output directory
+            completedSuccessfully = true
             Result.success(
                 successData(
                     outputDir = outputDir.absolutePath,
@@ -206,6 +223,9 @@ class VideoProcessingWorker(
                     totalFrames = totalFrames
                 )
             )
+        } catch (e: CancellationException) {
+            Logger.d("Processing cancelled")
+            throw e
         } catch (e: Exception) {
             Logger.e("Processing failed", e)
             Result.failure(errorData("Processing failed: ${e.message}"))
@@ -213,6 +233,18 @@ class VideoProcessingWorker(
             // Clean up
             segmentationRepository.close()
             motionFilter.reset()
+
+            if (!completedSuccessfully) {
+                cleanupOutputDir?.let { dir ->
+                    runCatching {
+                        if (dir.exists()) {
+                            dir.deleteRecursively()
+                        }
+                    }.onFailure { error ->
+                        Logger.w("Failed to cleanup partial output directory: ${dir.name}", error)
+                    }
+                }
+            }
         }
     }
 
@@ -237,7 +269,7 @@ class VideoProcessingWorker(
      * Save a processed frame as PNG with alpha.
      */
     private fun saveFrame(bitmap: Bitmap, outputDir: File, frameIndex: Int) {
-        val fileName = String.format(FRAME_NAME_FORMAT, frameIndex)
+        val fileName = String.format(Locale.US, FRAME_NAME_FORMAT, frameIndex)
         val file = File(outputDir, fileName)
 
         FileOutputStream(file).use { out ->

@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import com.videobgremover.app.domain.model.VideoMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,15 +40,21 @@ class VideoMetadataExtractor(private val context: Context) {
             val frameRate = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE
             )?.toFloatOrNull()
-                ?: retriever.extractMetadata(
-                    MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT
-                )?.toLongOrNull()?.let { frameCount ->
-                    if (durationMs > 0) frameCount * 1000f / durationMs else 30f
+                ?: run {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        retriever.extractMetadata(VIDEO_FRAME_COUNT_METADATA_KEY_COMPAT)
+                            ?.toLongOrNull()
+                            ?.let { frameCount ->
+                                if (durationMs > 0) frameCount * 1000f / durationMs else 30f
+                            }
+                    } else {
+                        null
+                    }
                 }
                 ?: 30f
 
             val codec = retriever.extractMetadata(
-                MediaMetadataRetriever.METADATA_KEY_VIDEO_CODEC
+                MediaMetadataRetriever.METADATA_KEY_MIMETYPE
             )
 
             val name = uri.lastPathSegment?.substringAfterLast("/")
@@ -95,12 +102,25 @@ class VideoMetadataExtractor(private val context: Context) {
             retriever.setDataSource(context, uri)
 
             val bitmap = if (width != null && height != null) {
-                retriever.getScaledFrameAtTime(
-                    timeUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                    width,
-                    height
-                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    retriever.getScaledFrameAtTime(
+                        timeUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                        width,
+                        height
+                    )
+                } else {
+                    val original = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    if (original != null && (original.width != width || original.height != height)) {
+                        val scaled = Bitmap.createScaledBitmap(original, width, height, true)
+                        if (scaled !== original) {
+                            original.recycle()
+                        }
+                        scaled
+                    } else {
+                        original
+                    }
+                }
             } else {
                 retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } ?: return@withContext Result.failure(
@@ -142,5 +162,10 @@ class VideoMetadataExtractor(private val context: Context) {
                 // Ignore release errors
             }
         }
+    }
+
+    companion object {
+        // Same value as MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT (API 28+)
+        private const val VIDEO_FRAME_COUNT_METADATA_KEY_COMPAT = 32
     }
 }

@@ -54,15 +54,15 @@ class ZipExporter(private val context: Context) {
     suspend fun exportFrames(
         sourceDir: File,
         outputFile: File? = null,
-        onProgress: ((ExportProgress) -> Unit)? = null
+        onProgress: (suspend (ExportProgress) -> Unit)? = null
     ): ZipExportResult = withContext(Dispatchers.IO) {
         if (!sourceDir.exists() || !sourceDir.isDirectory) {
             return@withContext ZipExportResult.Error("Source directory does not exist")
         }
 
-        val pngFiles = sourceDir.listFiles { file ->
+        val pngFiles: List<File> = sourceDir.listFiles { file ->
             file.extension.lowercase() == "png"
-        }?.sortedBy { it.name } ?: emptyArray()
+        }?.sortedBy { it.name } ?: emptyList()
 
         if (pngFiles.isEmpty()) {
             return@withContext ZipExportResult.Error("No PNG files found in source directory")
@@ -81,7 +81,7 @@ class ZipExporter(private val context: Context) {
             ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zos ->
                 val buffer = ByteArray(BUFFER_SIZE)
 
-                pngFiles.forEachIndexed { index, file ->
+                for ((index, file) in pngFiles.withIndex()) {
                     if (!isActive) {
                         zipFile.delete()
                         return@withContext ZipExportResult.Cancelled
@@ -112,7 +112,7 @@ class ZipExporter(private val context: Context) {
                 }
             }
 
-            Logger.d("Created ZIP: ${zipFile.absolutePath}, files: ${pngFiles.size}, bytes: $totalBytes")
+            Logger.d("Created ZIP ${zipFile.name}, files: ${pngFiles.size}, bytes: $totalBytes")
 
             ZipExportResult.Success(
                 zipFile = zipFile,

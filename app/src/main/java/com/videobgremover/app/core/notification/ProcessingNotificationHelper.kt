@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
 import com.videobgremover.app.R
@@ -105,20 +104,18 @@ class ProcessingNotificationHelper(private val context: Context) {
      * Create the notification channel (required for Android O+).
      */
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                context.getString(R.string.processing_channel_name),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = context.getString(R.string.processing_channel_description)
-                setShowBadge(false)
-                enableLights(false)
-                enableVibration(false)
-            }
-
-            notificationManager.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            context.getString(R.string.processing_channel_name),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = context.getString(R.string.processing_channel_description)
+            setShowBadge(false)
+            enableLights(false)
+            enableVibration(false)
         }
+
+        notificationManager.createNotificationChannel(channel)
     }
 
     companion object {

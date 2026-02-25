@@ -13,9 +13,10 @@ import com.videobgremover.app.data.repository.ExportState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -40,15 +41,16 @@ data class ExportUiState(
  * ViewModel for managing export operations.
  */
 class ExportViewModel(
-    private val context: Context,
+    context: Context,
     private val sourceDir: String
 ) : ViewModel() {
 
-    private val repository = ExportRepository(context)
+    private val repository = ExportRepository(context.applicationContext)
     private val sourceDirFile = File(sourceDir)
 
     private val _uiState = MutableStateFlow(ExportUiState())
     val uiState: StateFlow<ExportUiState> = _uiState.asStateFlow()
+    private var exportJob: Job? = null
 
     init {
         checkStorageSpace()
@@ -115,7 +117,7 @@ class ExportViewModel(
      * Start the export process.
      */
     fun startExport(safUri: Uri? = null) {
-        if (_uiState.value.exportState.isExporting) return
+        if (_uiState.value.exportState.isExporting || exportJob?.isActive == true) return
 
         val format = _uiState.value.exportFormat
 
@@ -129,7 +131,7 @@ class ExportViewModel(
      * Export as mask MP4 video.
      */
     private fun exportAsMaskMp4(safUri: Uri? = null) {
-        viewModelScope.launch {
+        launchExportJob {
             _uiState.update { it.copy(exportState = it.exportState.copy(isExporting = true)) }
 
             val state = repository.exportAsMaskMp4(sourceDirFile, safUri)
@@ -141,15 +143,6 @@ class ExportViewModel(
                     canShare = state.outputUri != null && !state.isExporting
                 )
             }
-
-            // Copy to SAF if needed
-            if (state.outputUri != null &&
-                _uiState.value.exportDestination == ExportDestination.SAF &&
-                safUri != null
-            ) {
-                val file = File(state.outputUri.path ?: return@launch)
-                repository.copyToSafDestination(file, safUri)
-            }
         }
     }
 
@@ -157,50 +150,25 @@ class ExportViewModel(
      * Export as ZIP file.
      */
     private fun exportAsZip(safUri: Uri? = null) {
-        repository.exportAsZip(sourceDirFile, safUri)
-            .onEach { state ->
-                _uiState.update {
-                    it.copy(
-                        exportState = state,
-                        outputUri = state.outputUri,
-                        canShare = state.outputUri != null && !state.isExporting
-                    )
-                }
-
-                // If we have a URI and SAF destination, copy to SAF
-                if (state.outputUri != null &&
-                    !state.isExporting &&
-                    _uiState.value.exportDestination == ExportDestination.SAF &&
-                    safUri != null
-                ) {
-                    copyToSaf(state.outputUri, safUri)
-                }
-            }
-            .launchIn(viewModelScope)
-    }
-
-    /**
-     * Copy exported file to SAF destination.
-     */
-    private fun copyToSaf(sourceUri: Uri, destinationUri: Uri) {
-        viewModelScope.launch {
-            // Get the actual file from content URI
-            val file = File(sourceUri.path ?: return@launch)
-
-            repository.copyToSafDestination(file, destinationUri)
-                .onSuccess {
-                    _uiState.update { state ->
-                        state.copy(
-                            outputUri = it,
-                            canShare = true
+        launchExportJob {
+            repository.exportAsZip(sourceDirFile, safUri)
+                .collect { state ->
+                    _uiState.update {
+                        it.copy(
+                            exportState = state,
+                            outputUri = state.outputUri,
+                            canShare = state.outputUri != null && !state.isExporting
                         )
                     }
                 }
-                .onFailure { error ->
-                    _uiState.update {
-                        it.copy(error = "Failed to save: ${error.message}")
-                    }
-                }
+        }
+    }
+
+    private fun launchExportJob(block: suspend () -> Unit) {
+        val previousJob = exportJob
+        exportJob = viewModelScope.launch {
+            previousJob?.cancelAndJoin()
+            block()
         }
     }
 
@@ -209,8 +177,11 @@ class ExportViewModel(
      */
     fun saveToMediaStore(fileName: String) {
         viewModelScope.launch {
-            val currentUri = _uiState.value.outputUri ?: return@launch
-            val file = File(currentUri.path ?: return@launch)
+            val file = _uiState.value.exportState.cacheFilePath?.let(::File)
+                ?: run {
+                    _uiState.update { it.copy(error = "No local export file available") }
+                    return@launch
+                }
 
             _uiState.update { it.copy(exportState = it.exportState.copy(isExporting = true)) }
 
@@ -245,7 +216,7 @@ class ExportViewModel(
     /**
      * Get metadata about the processed video.
      */
-    fun getMetadata(): Map<String, Any>? {
+    suspend fun getMetadata(): Map<String, Any>? {
         return repository.getProcessingMetadata(sourceDirFile)
     }
 
@@ -263,6 +234,11 @@ class ExportViewModel(
         viewModelScope.launch {
             repository.cleanupOutputDir(sourceDirFile)
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        exportJob?.cancel()
     }
 
     companion object {

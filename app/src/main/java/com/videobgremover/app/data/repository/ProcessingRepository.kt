@@ -9,11 +9,17 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.google.common.util.concurrent.FutureCallback
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.MoreExecutors
 import com.videobgremover.app.data.worker.VideoProcessingWorker
 import com.videobgremover.app.data.worker.VideoProcessingWorker.Companion.createInputData
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import androidx.work.workDataOf
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Repository for managing video processing operations.
@@ -160,5 +166,22 @@ class ProcessingRepository(private val context: Context) {
  * Extension to convert ListenableFuture to suspend function.
  */
 private suspend fun <T> com.google.common.util.concurrent.ListenableFuture<T>.await(): T {
-    return kotlinx.coroutines.futures.await()
+    return suspendCancellableCoroutine { continuation ->
+        Futures.addCallback(
+            this,
+            object : FutureCallback<T> {
+                @Suppress("UNCHECKED_CAST")
+                override fun onSuccess(result: T?) {
+                    continuation.resume(result as T)
+                }
+
+                override fun onFailure(t: Throwable) {
+                    continuation.resumeWithException(t)
+                }
+            },
+            MoreExecutors.directExecutor()
+        )
+
+        continuation.invokeOnCancellation { cancel(true) }
+    }
 }

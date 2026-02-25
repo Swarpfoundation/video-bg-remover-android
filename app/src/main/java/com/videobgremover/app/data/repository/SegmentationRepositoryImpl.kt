@@ -3,15 +3,18 @@ package com.videobgremover.app.data.repository
 import android.content.Context
 import android.graphics.Bitmap
 import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.ByteBufferExtractor
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenterResult
 import com.videobgremover.app.core.Logger
+import com.videobgremover.app.domain.model.SegmentationMask
 import com.videobgremover.app.domain.repository.SegmentationRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.nio.ByteOrder
 
 /**
  * Implementation of [SegmentationRepository] using MediaPipe Image Segmenter.
@@ -87,7 +90,7 @@ class SegmentationRepositoryImpl(
         }
     }
 
-    override suspend fun segmentFrame(bitmap: Bitmap): Result<FloatArray> =
+    override suspend fun segmentFrame(bitmap: Bitmap): Result<SegmentationMask> =
         withContext(Dispatchers.Default) {
             if (!isInitialized) {
                 initialize().onFailure {
@@ -108,7 +111,7 @@ class SegmentationRepositoryImpl(
                 val result: ImageSegmenterResult = segmenter.segment(mpImage)
 
                 // Extract confidence mask (first mask is person/background)
-                val masks = result.confidenceMasks()
+                val masks = result.confidenceMasks().orElse(emptyList())
                 if (masks.isEmpty()) {
                     return@withContext Result.failure(
                         IllegalStateException("No segmentation masks returned")
@@ -117,14 +120,33 @@ class SegmentationRepositoryImpl(
 
                 // Get the first mask (person)
                 val mask = masks.first()
-                val maskWidth = mask.width
-                val maskHeight = mask.height
+                val maskWidth = mask.getWidth()
+                val maskHeight = mask.getHeight()
+                val expectedSize = maskWidth * maskHeight
 
                 // Convert to FloatArray
-                val floatArray = FloatArray(maskWidth * maskHeight)
-                mask.get(floatArray)
+                val byteBuffer = ByteBufferExtractor.extract(mask)
+                    .duplicate()
+                    .order(ByteOrder.nativeOrder())
+                byteBuffer.rewind()
+                val floatBuffer = byteBuffer.asFloatBuffer()
+                if (floatBuffer.remaining() < expectedSize) {
+                    return@withContext Result.failure(
+                        IllegalStateException(
+                            "Confidence mask buffer too small: ${floatBuffer.remaining()} < $expectedSize"
+                        )
+                    )
+                }
+                val floatArray = FloatArray(expectedSize)
+                floatBuffer.get(floatArray)
 
-                Result.success(floatArray)
+                Result.success(
+                    SegmentationMask(
+                        values = floatArray,
+                        width = maskWidth,
+                        height = maskHeight
+                    )
+                )
             } catch (e: Exception) {
                 Logger.e("Segmentation failed", e)
                 Result.failure(e)
@@ -153,23 +175,8 @@ class SegmentationRepositoryImpl(
             val configurationInfo = activityManager.deviceConfigurationInfo
             val supportsEs31 = configurationInfo.reqGlEsVersion >= 0x00030001
 
-            // Also check if it's not a known problematic GPU
-            val renderer = javax.microedition.khronos.egl.EGLContext.getEGL()
-                .let { egl ->
-                    (egl as javax.microedition.khronos.egl.EGL10).eglQueryString(
-                        javax.microedition.khronos.egl.EGL10.EGL_DEFAULT_DISPLAY,
-                        javax.microedition.khronos.egl.EGL10.EGL_RENDERER
-                    )
-                }
-
-            val isSupported = supportsEs31 && renderer?.let {
-                // Avoid known problematic renderers
-                !it.contains("PowerVR") && // Some PowerVR GPUs have issues
-                    !it.contains("sw") // Software renderer
-            } != false
-
-            Logger.d("GPU support check: OpenGL ES 3.1=$supportsEs31, Renderer=$renderer, Supported=$isSupported")
-            isSupported
+            Logger.d("GPU support check: OpenGL ES 3.1=$supportsEs31")
+            supportsEs31
         } catch (e: Exception) {
             Logger.w("Failed to check GPU support, defaulting to false", e)
             false

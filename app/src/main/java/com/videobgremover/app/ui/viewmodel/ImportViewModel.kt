@@ -10,10 +10,12 @@ import com.videobgremover.app.core.quality.QualityIssue
 import com.videobgremover.app.core.quality.VideoQualityAnalyzer
 import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.domain.model.VideoMetadata
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -50,12 +52,20 @@ class ImportViewModel(
 
     private val _uiState = MutableStateFlow(ImportUiState())
     val uiState: StateFlow<ImportUiState> = _uiState.asStateFlow()
+    private var selectionJob: Job? = null
+    private var thumbnailJob: Job? = null
+    private var qualityJob: Job? = null
+    private var selectionToken: Long = 0
 
     /**
      * Called when a video is selected from the picker.
      */
     fun onVideoSelected(uri: Uri) {
-        viewModelScope.launch {
+        cancelSelectionJobs()
+        val token = ++selectionToken
+
+        selectionJob = viewModelScope.launch {
+            replaceThumbnail(null)
             _uiState.update {
                 it.copy(
                     isLoading = true,
@@ -67,6 +77,7 @@ class ImportViewModel(
 
             // Validate the video first
             val isValid = metadataExtractor.isValidVideo(uri)
+            if (!isCurrentSelection(token) || !isActive) return@launch
             if (!isValid) {
                 _uiState.update {
                     it.copy(
@@ -79,9 +90,11 @@ class ImportViewModel(
 
             // Extract metadata
             val metadataResult = metadataExtractor.extract(uri)
+            if (!isCurrentSelection(token) || !isActive) return@launch
 
             metadataResult.fold(
                 onSuccess = { metadata ->
+                    if (!isCurrentSelection(token) || !isActive) return@fold
                     _uiState.update {
                         it.copy(
                             isLoading = false,
@@ -90,10 +103,11 @@ class ImportViewModel(
                     }
 
                     // Extract thumbnail and analyze quality in parallel
-                    extractThumbnail(uri)
-                    analyzeQuality(uri)
+                    extractThumbnail(uri, token)
+                    analyzeQuality(uri, token)
                 },
                 onFailure = { error ->
+                    if (!isCurrentSelection(token) || !isActive) return@fold
                     _uiState.update {
                         it.copy(
                             isLoading = false,
@@ -108,11 +122,14 @@ class ImportViewModel(
     /**
      * Analyze video quality to detect potential issues.
      */
-    private fun analyzeQuality(uri: Uri) {
-        viewModelScope.launch {
+    private fun analyzeQuality(uri: Uri, token: Long) {
+        qualityJob?.cancel()
+        qualityJob = viewModelScope.launch {
+            if (!isCurrentSelection(token) || !isActive) return@launch
             _uiState.update { it.copy(isAnalyzingQuality = true) }
 
             val issues = qualityAnalyzer.analyze(uri)
+            if (!isCurrentSelection(token) || !isActive) return@launch
             val score = calculateQualityScore(issues)
 
             _uiState.update {
@@ -145,8 +162,9 @@ class ImportViewModel(
     /**
      * Extract thumbnail for the selected video.
      */
-    private fun extractThumbnail(uri: Uri) {
-        viewModelScope.launch {
+    private fun extractThumbnail(uri: Uri, token: Long) {
+        thumbnailJob?.cancel()
+        thumbnailJob = viewModelScope.launch {
             val thumbnailResult = metadataExtractor.extractThumbnail(
                 uri = uri,
                 width = THUMBNAIL_WIDTH,
@@ -155,7 +173,11 @@ class ImportViewModel(
 
             thumbnailResult.fold(
                 onSuccess = { bitmap ->
-                    _uiState.update { it.copy(thumbnail = bitmap) }
+                    if (!isCurrentSelection(token) || !isActive) {
+                        recycleBitmap(bitmap)
+                        return@fold
+                    }
+                    replaceThumbnail(bitmap)
                 },
                 onFailure = {
                     // Thumbnail is optional, don't show error
@@ -182,6 +204,9 @@ class ImportViewModel(
      * Clear the current selection.
      */
     fun clearSelection() {
+        cancelSelectionJobs()
+        selectionToken++
+        replaceThumbnail(null)
         _uiState.update {
             ImportUiState(hasPermission = it.hasPermission)
         }
@@ -189,8 +214,33 @@ class ImportViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        // Clean up bitmap
-        _uiState.value.thumbnail?.recycle()
+        cancelSelectionJobs()
+        recycleBitmap(_uiState.value.thumbnail)
+    }
+
+    private fun isCurrentSelection(token: Long): Boolean = token == selectionToken
+
+    private fun cancelSelectionJobs() {
+        selectionJob?.cancel()
+        thumbnailJob?.cancel()
+        qualityJob?.cancel()
+    }
+
+    private fun replaceThumbnail(newBitmap: Bitmap?) {
+        var oldBitmap: Bitmap? = null
+        _uiState.update { current ->
+            oldBitmap = current.thumbnail
+            current.copy(thumbnail = newBitmap)
+        }
+        if (oldBitmap !== newBitmap) {
+            recycleBitmap(oldBitmap)
+        }
+    }
+
+    private fun recycleBitmap(bitmap: Bitmap?) {
+        if (bitmap != null && !bitmap.isRecycled) {
+            runCatching { bitmap.recycle() }
+        }
     }
 
     companion object {

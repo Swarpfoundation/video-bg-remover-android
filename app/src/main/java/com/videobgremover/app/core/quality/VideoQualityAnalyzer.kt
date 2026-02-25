@@ -65,6 +65,7 @@ class VideoQualityAnalyzer(private val context: Context) {
             var totalBlur = 0.0
             var totalBackgroundComplexity = 0.0
             var smallSubjectFrames = 0
+            var analyzedFrames = 0
 
             sampleTimes.forEach { timeMs ->
                 val bitmap = retriever.getFrameAtTime(
@@ -76,6 +77,7 @@ class VideoQualityAnalyzer(private val context: Context) {
                     totalBrightness += calculateAverageBrightness(it)
                     totalBlur += estimateMotionBlur(it)
                     totalBackgroundComplexity += estimateBackgroundComplexity(it)
+                    analyzedFrames++
 
                     if (isSubjectTooSmall(it)) {
                         smallSubjectFrames++
@@ -85,9 +87,14 @@ class VideoQualityAnalyzer(private val context: Context) {
                 }
             }
 
-            val avgBrightness = totalBrightness / sampleTimes.size
-            val avgBlur = totalBlur / sampleTimes.size
-            val avgComplexity = totalBackgroundComplexity / sampleTimes.size
+            if (analyzedFrames == 0) {
+                Logger.w("Quality analysis skipped: no frames could be extracted")
+                return@withContext issues
+            }
+
+            val avgBrightness = totalBrightness / analyzedFrames
+            val avgBlur = totalBlur / analyzedFrames
+            val avgComplexity = totalBackgroundComplexity / analyzedFrames
 
             // Detect issues
             if (avgBrightness < LOW_LIGHT_THRESHOLD) {
@@ -166,6 +173,7 @@ class VideoQualityAnalyzer(private val context: Context) {
     private fun calculateAverageBrightness(bitmap: Bitmap): Double {
         var totalLuminance = 0.0
         val pixels = IntArray(bitmap.width * bitmap.height)
+        if (pixels.isEmpty()) return 0.0
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
 
         pixels.forEach { pixel ->
@@ -186,6 +194,7 @@ class VideoQualityAnalyzer(private val context: Context) {
     private fun estimateMotionBlur(bitmap: Bitmap): Double {
         // Simple Laplacian variance for sharpness estimation
         var laplacianSum = 0.0
+        var sampleCount = 0
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
 
@@ -205,11 +214,12 @@ class VideoQualityAnalyzer(private val context: Context) {
                 // Laplacian
                 val laplacian = 4 * center - left - right - top - bottom
                 laplacianSum += laplacian * laplacian
+                sampleCount++
             }
         }
 
         // Lower variance = more blur
-        return laplacianSum / (pixels.size / 10)
+        return if (sampleCount > 0) laplacianSum / sampleCount else 0.0
     }
 
     /**
@@ -217,6 +227,7 @@ class VideoQualityAnalyzer(private val context: Context) {
      */
     private fun estimateBackgroundComplexity(bitmap: Bitmap): Double {
         var edgeCount = 0
+        var sampleCount = 0
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
 
@@ -246,11 +257,11 @@ class VideoQualityAnalyzer(private val context: Context) {
                 if (sqrt((gx * gx + gy * gy).toDouble()) > 100) {
                     edgeCount++
                 }
+                sampleCount++
             }
         }
 
-        val sampleSize = (bitmap.width / 5) * (bitmap.height / 5)
-        return edgeCount.toDouble() / sampleSize
+        return if (sampleCount > 0) edgeCount.toDouble() / sampleCount else 0.0
     }
 
     /**

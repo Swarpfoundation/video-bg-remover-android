@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
+import com.videobgremover.app.core.quality.VideoQualityAnalyzer
 import com.videobgremover.app.data.extractor.VideoMetadataExtractor
 import com.videobgremover.app.domain.model.VideoMetadata
 import io.mockk.coEvery
@@ -38,6 +39,7 @@ class ImportViewModelTest {
     private val testDispatcher = StandardTestDispatcher()
     private lateinit var context: Context
     private lateinit var extractor: VideoMetadataExtractor
+    private lateinit var qualityAnalyzer: VideoQualityAnalyzer
     private lateinit var viewModel: ImportViewModel
 
     @Before
@@ -45,7 +47,9 @@ class ImportViewModelTest {
         Dispatchers.setMain(testDispatcher)
         context = mockk(relaxed = true)
         extractor = mockk(relaxed = true)
-        viewModel = ImportViewModel(extractor)
+        qualityAnalyzer = mockk(relaxed = true)
+        coEvery { qualityAnalyzer.analyze(any()) } returns emptyList()
+        viewModel = ImportViewModel(extractor, qualityAnalyzer)
     }
 
     @After

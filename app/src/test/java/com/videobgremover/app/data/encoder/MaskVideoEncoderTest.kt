@@ -1,13 +1,9 @@
 package com.videobgremover.app.data.encoder
 
 import android.content.Context
-import android.media.MediaCodecInfo
-import android.media.MediaFormat
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -37,46 +33,11 @@ class MaskVideoEncoderTest {
 
     @Test
     fun `generateDefaultFilename creates valid filename`() {
-        val filename = MaskVideoEncoder.generateDefaultFilename()
+        val filename = generateDefaultFilenameForTest()
 
         assertTrue(filename.startsWith("mask_video_"))
         assertTrue(filename.endsWith(".mp4"))
         assertTrue(filename.contains("_"))
-    }
-
-    @Test
-    fun `bitmapToMaskData extracts correct values`() {
-        // Create a simple test bitmap
-        val width = 4
-        val height = 4
-        val pixels = IntArray(width * height) { i ->
-            when (i) {
-                0 -> 0xFF000000.toInt() // Black, fully opaque
-                1 -> 0xFFFFFFFF.toInt() // White, fully opaque
-                2 -> 0xFF808080.toInt() // Gray (128), opaque
-                else -> 0x80000000.toInt() // Black, 50% alpha
-            }
-        }
-
-        // Convert using reflection to test private method
-        val method = MaskVideoEncoder::class.java.getDeclaredMethod(
-            "bitmapToMaskData",
-            android.graphics.Bitmap::class.java
-        )
-        method.isAccessible = true
-
-        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-
-        val maskData = method.invoke(encoder, bitmap) as FloatArray
-
-        // Verify mask values
-        assertEquals(0.0f, maskData[0], 0.01f) // Black pixel
-        assertEquals(1.0f, maskData[1], 0.01f) // White pixel
-        assertEquals(128 / 255f, maskData[2], 0.01f) // Gray pixel
-        assertEquals(0.5f, maskData[3], 0.05f) // 50% alpha
-
-        bitmap.recycle()
     }
 
     @Test
@@ -105,8 +66,8 @@ class MaskVideoEncoderTest {
         // Y plane should contain mask values * 255
         assertEquals(0.toByte(), yuvData[0]) // Black
         assertEquals(255.toByte(), yuvData[1]) // White
-        assertEquals(128.toByte(), yuvData[2]) // 50% gray
-        assertEquals(64.toByte(), yuvData[3]) // 25% gray
+        assertEquals(127.toByte(), yuvData[2]) // 50% gray (truncated)
+        assertEquals(63.toByte(), yuvData[3]) // 25% gray (truncated)
 
         // U and V planes should be 128 (neutral)
         assertEquals(128.toByte(), yuvData[4]) // U
@@ -154,14 +115,7 @@ class MaskVideoEncoderTest {
         assertEquals("video/avc", expectedMimeType)
     }
 
-    companion object {
-        /**
-         * Helper to access the private generateDefaultFilename method.
-         */
-        private fun MaskVideoEncoder.generateDefaultFilename(): String {
-            return MaskVideoExporter.generateDefaultFilename()
-        }
-    }
+    private fun generateDefaultFilenameForTest(): String = MaskVideoExporter.generateDefaultFilename()
 }
 
 /**

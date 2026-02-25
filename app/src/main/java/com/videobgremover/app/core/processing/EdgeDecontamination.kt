@@ -51,6 +51,9 @@ class EdgeDecontamination {
         width: Int,
         height: Int
     ): Bitmap {
+        require(alphaMask.size >= width * height) {
+            "Alpha mask size (${alphaMask.size}) is smaller than width*height (${width * height})"
+        }
         if (!config.enableForGreen && !config.enableForBlue && !config.enableForRed) {
             return rgbaBitmap // Decontamination disabled
         }

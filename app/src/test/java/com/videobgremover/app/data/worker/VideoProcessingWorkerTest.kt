@@ -4,13 +4,12 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Data
 import androidx.work.ListenableWorker
-nimport androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
 import kotlinx.coroutines.runBlocking
 import org.hamcrest.CoreMatchers.`is`
-import org.hamcrest.CoreMatchers.instanceOf
 import org.hamcrest.MatcherAssert.assertThat
 import org.junit.Before
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -68,7 +67,7 @@ class VideoProcessingWorkerTest {
 
         val result = worker.doWork()
 
-        assertThat(result, `is`(ListenableWorker.Result.failure()))
+        assertTrue(result is ListenableWorker.Result.Failure)
     }
 
     @Test

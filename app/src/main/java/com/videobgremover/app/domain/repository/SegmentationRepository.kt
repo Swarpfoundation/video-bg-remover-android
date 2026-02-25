@@ -1,6 +1,7 @@
 package com.videobgremover.app.domain.repository
 
 import android.graphics.Bitmap
+import com.videobgremover.app.domain.model.SegmentationMask
 
 /**
  * Repository interface for image segmentation operations.
@@ -13,9 +14,9 @@ interface SegmentationRepository {
 
     /**
      * Segment a single frame and return the confidence mask.
-     * @return FloatArray of confidence values (0.0 to 1.0) or null on error
+     * Returns mask values plus the model output dimensions.
      */
-    suspend fun segmentFrame(bitmap: Bitmap): Result<FloatArray>
+    suspend fun segmentFrame(bitmap: Bitmap): Result<SegmentationMask>
 
     /**
      * Release resources.

@@ -7,6 +7,7 @@ import android.net.Uri
 import com.videobgremover.app.core.Logger
 import com.videobgremover.app.data.encoder.MaskVideoEncoder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -113,7 +114,7 @@ class MaskVideoExporter(private val context: Context) {
 
             while (currentTimeMs <= durationMs &&
                 processedFrames < maxFrames &&
-                kotlinx.coroutines.coroutineContext.isActive
+                currentCoroutineContext().isActive
             ) {
                 // Extract frame bitmap
                 val bitmap = retriever.getFrameAtTime(
@@ -126,7 +127,12 @@ class MaskVideoExporter(private val context: Context) {
                     val maskData = bitmapToMaskData(bitmap)
 
                     // Encode frame
-                    encoder.encodeFrame(maskData, bitmap.width, bitmap.height)
+                    val encoded = encoder.encodeFrame(maskData, bitmap.width, bitmap.height)
+                    if (!encoded) {
+                        bitmap.recycle()
+                        emit(MaskVideoExportResult.Error("Failed to encode frame ${processedFrames + 1}"))
+                        return@flow
+                    }
 
                     bitmap.recycle()
                 }
@@ -191,9 +197,9 @@ class MaskVideoExporter(private val context: Context) {
             }
 
             // Get PNG files and sort them
-            val pngFiles = processedDir.listFiles { file ->
+            val pngFiles: List<File> = processedDir.listFiles { file ->
                 file.extension.lowercase() == "png" && file.name.startsWith("frame_")
-            }?.sortedBy { it.name } ?: emptyArray()
+            }?.sortedBy { it.name } ?: emptyList()
 
             if (pngFiles.isEmpty()) {
                 encoder.release()
@@ -201,8 +207,8 @@ class MaskVideoExporter(private val context: Context) {
             }
 
             // Process each PNG file
-            pngFiles.forEachIndexed { index, pngFile ->
-                if (!isActive) {
+            for (pngFile in pngFiles) {
+                if (!currentCoroutineContext().isActive) {
                     encoder.release()
                     return@withContext MaskVideoExportResult.Cancelled
                 }
@@ -211,8 +217,12 @@ class MaskVideoExporter(private val context: Context) {
                 val bitmap = android.graphics.BitmapFactory.decodeFile(pngFile.absolutePath)
                 if (bitmap != null) {
                     val maskData = bitmapToMaskData(bitmap)
-                    encoder.encodeFrame(maskData, bitmap.width, bitmap.height)
+                    val encoded = encoder.encodeFrame(maskData, bitmap.width, bitmap.height)
                     bitmap.recycle()
+                    if (!encoded) {
+                        encoder.release()
+                        return@withContext MaskVideoExportResult.Error("Failed to encode frame: ${pngFile.name}")
+                    }
                 }
             }
 
